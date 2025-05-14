@@ -1,0 +1,125 @@
+Latogasunk el a https://prometheus.io/ oldalra -> kattints a download-ra ->
+Ha nem talalod a megfelelot akkor kattints a Release notes-ra es atiranyit a github oldalra ->
+Linux szervernek toltom le ugyhogy
+
+# Legújabb verzió letöltése
+  cd /
+  cd /opt
+  sudo wget https://github.com/prometheus/prometheus/releases/download/v3.3.1/prometheus-3.3.1.linux-amd64.tar.gz
+  ls
+
+# Csomag kicsomagolása
+  sudo tar xvf prometheus-3.3.1.linux-amd64.tar.gz
+  ls
+  cd prometheus-3.3.1.linux-amd64/
+
+# Fájlok áthelyezése
+  sudo mv prometheus /usr/local/bin/
+  sudo mv promtool /usr/local/bin/
+  sudo mkdir -p /etc/prometheus
+  sudo mv prometheus.yml /etc/prometheus/
+  sudo mkdir -p /var/lib/prometheus
+  sudo cp -r consoles/ console_libraries/ /etc/prometheus/
+
+# Systemd szolgáltatás létrehozása
+  sudo nano /etc/systemd/system/prometheus.service
+
+Tartalma:
+
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=nobody
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus/ \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries
+
+[Install]
+WantedBy=default.target
+
+# Szolgáltatás engedélyezése és indítása
+  sudo systemctl daemon-reexec
+  sudo systemctl enable prometheus
+  sudo systemctl start prometheus
+
+# Webes elérés (Ha minden jól ment)
+http://<szerver_ip>:9090
+
+# Cím használata: localhost:9090 vs <szerver_ip>:9090
+A localhost:9090 azt jelenti, hogy a Prometheus önmagát monitorozza.
+Ha másik gépről akarsz hozzáférni a web UI-hoz (pl. a böngészőből), akkor a szerver IP címét kell megadni, például: http://192.168.1.123:9090
+A prometheus.yml fájlban maradhat localhost:9090, mert az ottani cél az, hogy saját magát lekérdezze belsőleg.
+
+# Ha nem mukodik akkor a megoldas
+  sudo mkdir -p /var/lib/prometheus			# Hozd létre a könyvtárat, ha még nincs
+  sudo chown -R nobody:nogroup /var/lib/prometheus	# Állítsd be a megfelelő tulajdonost (ha nobody-val fut a szolgáltatás). (Ha mást használsz a prometheus.service fájlban pl. prometheus, akkor azt add meg helyette.)
+  sudo systemctl restart prometheus			# Indítsd újra a szolgáltatást:
+  sudo systemctl status prometheus			# Nézd meg az állapotot:
+
+# YAML fajl konfiguralasa
+ sudo nano /etc/prometheus/prometheus.yml
+
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+- job_name: "prometheus"
+  static_configs:
+  - targets:
+    - localhost:9090
+- job_name: "demo"
+  static_configs:
+  - targets:
+    - demo.promlabs.com:10000
+    - demo.promlabs.com:10001
+    - demo.promlabs.com:10002
+
+Mit jelent?
+global.scrape_interval: 5s	->  minden targetet 5 másodpercenként lekérdez.
+job_name: "prometheus"		->  ez saját magára hivatkozik (lokálisan gyűjt adatot).
+job_name: "demo"		->  külső mintaadatokat gyűjt egy demo oldalról (játékos célra nagyon jó)
+
+# Indítás parancssorból
+A systemd telepítés után nem kell már ezt csinálni:
+cd /usr/local/bin/prometheus
+./prometheus
+
+Mert most már így kell:
+sudo systemctl restart prometheus
+
+# Böngészőből elérni Prometheust
+Látogass el erre:
+http://<szerver_ip>:9090
+
+Majd:
+Menü: Status -> Targets -> itt láthatod az aktív scrape célokat (mint localhost:9090, demo.promlabs.com:10000, stb.)
+
+# Lekérdezések a főoldalon
+A keresőmezőbe beírhatod:
+Alapmetrika:
+prometheus_tsdb_head_samples_appended_total
+Ez mutatja, mennyi minta lett rögzítve.
+
+Rate függvény:
+rate(prometheus_tsdb_head_samples_appended_total[1m])
+
+Ez azt mutatja, milyen sebességgel érkeznek a minták (per másodperc, 1 perces ablak alapján).
+
+Histogram példa:
+histogram_quantile(0.9, sum by(le, path) (rate(demo_api_request_duration_seconds_bucket[5m])))
+
+Ez a demo endpoint válaszidejének 90%-os értékét mutatja (tehát az API-hívások 90%-a ennyi idő alatt vagy gyorsabban lefutott).
+
+# Összefoglalás: mit tegyél most
+Hagyd localhost:9090-on a saját lekérdezést.
+Böngészőből a szerver IP címével nyisd meg Prometheust.
+Ne futtasd a binárist kézzel (./prometheus), csak systemctl restart prometheus.
+Lekérdezések mennek a UI-ból,rate(...), histogram_quantile(...).
+
+
+folyt köv....

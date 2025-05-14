@@ -1,0 +1,181 @@
+# Docker Compose fájl Prometheus + Node Exporter + Grafana szolgáltatásokhoz
+A docker-compose.yml fájl három fő szolgáltatást definiál:
+
+# 1. Node Exporter
+
+  node_exporter:
+    container_name: node_exporter
+    image: prom/node-exporter:latest
+    command:
+      - '--path.rootfs=/host'
+    pid: host
+    volumes:
+      - '/:/host:ro'
+
+Célja: A host gép rendszer-metrikáinak gyűjtése (CPU, memória, fájlrendszer stb.).
+A --path.rootfs=/host kapcsolóval a Node Exporter a gazdagép fájlrendszerén keresztül éri el az adatokat.
+A pid: host opció biztosítja, hogy a konténer hozzáférjen a host PID névteréhez.
+A teljes gazdagép fájlrendszerét csatoljuk read-only (csak olvasható) módban /host útvonalra a konténeren belül.
+
+# 2. Prometheus
+
+  prometheus:
+    container_name: prometheus
+    image: prom/prometheus:latest
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./prometheus-data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+
+Célja: A metrikák gyűjtése és megjelenítése (pl. a Node Exporterből).
+A 9090:9090 porttovábbítás lehetővé teszi, hogy a Prometheus webes felületét elérjük a böngészőből.
+A ./prometheus.yml fájlban található a konfiguráció, ezt csatoljuk a konténer megfelelő útvonalára.
+A ./prometheus-data kötet a Prometheus által gyűjtött adatokat tartósítja a host gépen.
+
+# 3. Grafana
+
+  grafana:
+    container_name: grafana
+    image: grafana/grafana-oss:latest
+    ports:
+      - "5000:3000"
+    volumes:
+      - ./grafana-data:/var/lib/grafana
+
+Célja: Grafikus dashboardok létrehozása a Prometheus által gyűjtött adatok alapján.
+A konténer belső 3000-es portját az 5000-es host portra irányítjuk, elkerülve ezzel esetleges portütközéseket más alkalmazásokkal.
+A grafana-data kötetben tárolódnak a Grafana beállításai és mentett dashboardjai.
+
+# Prometheus konfigurációs fájl (prometheus.yml)
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: node-exporter
+    static_configs:
+      - targets: ['node_exporter:9100']
+
+A scrape_interval: 15s beállítással a Prometheus 15 másodpercenként gyűjti be az adatokat.
+A scrape_configs részben meghatározzuk,hogy a Prometheus a node_exporter szolgáltatástól
+(a konténeren belüli név alapján) gyűjtse a metrikákat a 9100-es porton keresztül.
+
+# Futtatás és elérés
+1. Docker Compose futtatása:
+docker compose up -d
+
+# 2. Elérés böngészőből:
+Prometheus: http://localhost:9090
+Grafana: http://localhost:5000
+Ha nem helyi gépen futtatjuk (pl. VM), akkor a host IP-címét kell használni, pl.: http://192.168.1.133:9090
+
+# Grafana konfigurálása Prometheus adatforrással és dashboard létrehozása
+Miután elindítottuk a szolgáltatásokat a docker compose paranccsal, lépjünk be a Grafana webes felületére a böngészőben:
+
+# 1. Grafana belépés
+Nyisd meg a Grafana-t a böngészőben:
+http://localhost:5000
+(vagy ha VM-et használsz, akkor pl. http://192.168.1.133:5000)
+
+Felhasználónév: admin
+
+Jelszó: admin
+(Első belépéskor lehet, hogy kér új jelszót megadni.)
+
+# 2. Prometheus adatforrás hozzáadása
+Bal oldali menüben kattints a Connections vagy "Data Sources" menüpontra.
+Válaszd az "Add new data source" lehetőséget.
+A keresőbe írd be: Prometheus, majd válaszd ki.
+A "HTTP" rész alatt az URL mezőhöz írd be:
+  http://localhost:9090
+  (vagy ha VM-ről van szó, akkor pl. http://192.168.1.133:9090)
+Görgess le és kattints a "Save & Test" gombra.
+Ha minden rendben van, zöld visszajelzést kapsz: „Data source is working”.
+
+# 3. Új dashboard létrehozása
+Kattints bal oldalon a "Dashboards" menüpontra, majd válaszd a "Create dashboard" lehetőséget.
+Kattints az "Add new visualization" gombra.
+A megjelenő szerkesztőben:
+  Data source: válaszd a Prometheus-t
+  Select a metric mezőbe írd be:
+    node_cpu_seconds_total
+
+# 4. Metrika szűrése és lekérdezés finomítása
+Ha szeretnéd, kattints a "Run queries" gombra az adatok frissítéséhez.
+Állítsd be a lekérdezés szűrőit (label-eket):
+  Label = mode -> Nem egyenlő (!=) -> idle
+  Kattints a + jelre, és adj hozzá új feltételt:
+    Label = cpu -> Egyenlő (=) -> 0
+A rendszer javasolhatja: "Add rate()" vagy irate()" -> Kattints az ajánlott irate() opcióra.
+Állítsd be a range értékét: 1m
+Kattints újra a "Run queries" gombra a frissítéshez.
+
+# 5. Grafikon testreszabása
+Jobb oldalon, a "Panel options" résznél:
+  Title mezőbe írd be például: CPU Utilization
+  Az "Legend" mezőbe írd be: {{mode}}
+Fent, a grafikon típusa részben kiválaszthatod, hogyan nézzen ki (pl. vonaldiagram).
+Végül kattints jobb felül a "Save dashboard" gombra.
+  Adj neki egy nevet, pl. Node Resources
+  Kattints a "Save" gombra.
+
+# 6. Újabb metrika hozzáadása (pl. lemezhasználat)
+A fő dashboard nézetben kattints az "Add panel" gombra -> "Add new visualization"
+Ha előzőleg már kimásoltad a lekérdezést, válts át a vizualizációs szerkesztőben "Code" nézetre.
+Illeszd be a következő lekérdezést:
+
+node_filesystem_size_bytes{device!~"/dev/vda1|tmpfs"} - node_filesystem_free_bytes
+
+Kattints a "Run queries" gombra.
+A jobb oldalon, a Title mezőben add meg a címet:
+  Used Disk Space
+Mentéshez ismét kattints a "Save dashboard" gombra.
+
+# 7. Dashboard áttekintése
+Ha visszalépsz a fő dashboard nézetre, látni fogod,
+hogy a CPU metrika mellé bekerült a lemezhasználat grafikonja is.
+
+# 1. Memóriahasználat (Used Memory)
+node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes
+
+Ez a lekérdezés kiszámolja a teljes memória és az elérhető memória különbségét, azaz a ténylegesen használt memóriát.
+
+Grafana konfigurálása:
+Kattints a "Add panel" -> "Add new visualization" lehetőségre.
+A szerkesztőben válaszd a Prometheus adatforrást.
+Illeszd be a fenti lekérdezést.
+Kattints a "Run queries" gombra.
+Jobb oldalon:
+  Title: Used Memor
+  Unit: válaszd ki a bytes vagy gigabytes (GB) mértékegységet a jobb oldali panelen.
+Mentsd el: Save dashboard
+
+# 2. Hálózati forgalom (Network Traffic)
+A node_network_receive_bytes_total és
+node_network_transmit_bytes_total
+metrikákat fogjuk használni, és irate() függvénnyel vizsgáljuk a másodpercenkénti adatátvitelt.
+
+irate(node_network_receive_bytes_total{device!~"lo"}[1m])
++
+irate(node_network_transmit_bytes_total{device!~"lo"}[1m])
+
+Ez a lekérdezés kiszámolja az egyes hálózati eszközökön átmenő bejövő és kimenő forgalmat másodpercenként, kizárva a lo (loopback) eszközt.
+
+Grafana konfigurálása:
+Ismét Add panel → Add new visualization
+Prometheus lekérdezés mezőbe illeszd be a fenti kódot.
+Kattints Run queries
+A jobb oldalon állítsd be:
+  Title: Network Traffic
+  Unit: válassz bytes/sec vagy MB/s
+Save dashboard
+
+Összesítés
+Mostanra a dashboard tartalmazza:
+CPU kihasználtság
+Lemezhasználat
+Memóriahasználat
+Hálózati forgalom
