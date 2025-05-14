@@ -1,6 +1,6 @@
-Latogasunk el a https://prometheus.io/ oldalra -> kattints a download-ra ->
-Ha nem talalod a megfelelot akkor kattints a Release notes-ra es atiranyit a github oldalra ->
-Linux szervernek toltom le ugyhogy
+Látogasunk el a https://prometheus.io/ oldalra -> kattints a download-ra ->
+Ha nem talalod a megfelelöt akkor kattints a Release notes-ra és átirányít a github oldalra ->
+Linux szervernek töltom le ugyhogy...
 
 # Legújabb verzió letöltése
   cd /
@@ -52,11 +52,10 @@ http://<szerver_ip>:9090
 
 # Cím használata: localhost:9090 vs <szerver_ip>:9090
 A localhost:9090 azt jelenti, hogy a Prometheus önmagát monitorozza.
-Ha másik gépről akarsz hozzáférni a web UI-hoz (pl. a böngészőből), akkor a szerver IP címét kell megadni, például: http://192.168.1.123:9090
+Ha másik gépről akarsz hozzáférni a web UI-hez (pl. a böngészőből), akkor a szerver IP címét kell megadni, például: http://192.168.1.123:9090
 A prometheus.yml fájlban maradhat localhost:9090, mert az ottani cél az, hogy saját magát lekérdezze belsőleg.
 
-# Ha nem mukodik akkor a megoldas
-  sudo mkdir -p /var/lib/prometheus			# Hozd létre a könyvtárat, ha még nincs
+# Ha nem működik akkor a megoldás
   sudo chown -R nobody:nogroup /var/lib/prometheus	# Állítsd be a megfelelő tulajdonost (ha nobody-val fut a szolgáltatás). (Ha mást használsz a prometheus.service fájlban pl. prometheus, akkor azt add meg helyette.)
   sudo systemctl restart prometheus			# Indítsd újra a szolgáltatást:
   sudo systemctl status prometheus			# Nézd meg az állapotot:
@@ -121,5 +120,122 @@ Böngészőből a szerver IP címével nyisd meg Prometheust.
 Ne futtasd a binárist kézzel (./prometheus), csak systemctl restart prometheus.
 Lekérdezések mennek a UI-ból,rate(...), histogram_quantile(...).
 
+# Prometheus Metrikatípusok Összefoglaló
+1. Gauges – Változó értékek mérése
+A gauge típusú metrikák értéke felfelé és lefelé is változhat. Tipikus példák:
+
+gueueLength.Set(0)       // konkrét érték beállítása
+gueueLength.Inc()        // növelés 1-gyel
+gueueLength.Dec()        // csökkentés 1-gyel
+gueueLength.Add(23)      // növelés 23-mal
+gueueLength.Sub(42)      // csökkentés 42-vel
+
+Használat: például várakozási sor hossza, memóriahasználat, hőmérséklet stb.
+
+2. Counters – Csak növekvő értékek mérése
+A counter típus mindig csak növekszik – például egy esemény előfordulásának számát méri. Sosem csökken vissza.
+
+totalRequests.Inc()       // 1-gyel növelés
+totalRequests.Add(5)      // 5-tel növelés
+
+Prometheus-beli példa:
+http_request_total 7734
+rate(http_request_total[5m])         // időegységre vetített átlagos növekedési ráta
+irate(http_request_total[1m])        // azonnali növekedési sebesség
+increase(http_request_total[1h])     // adott időintervallum alatti teljes növekedés
+
+Használat: pl. HTTP kérések száma, hibák száma stb.
+
+3. Summaries – Eloszlás és percentilisek
+A summary metrika olyan numerikus értékek eloszlását méri, mint például a válaszidő. Ezekből automatikusan percentiliseket számít (pl. 95%, 99%).
+
+requestDurations.Observe(2.3)   // egy új mérési adat rögzítése
+
+Használat: pl. API válaszidők, feldolgozási idő stb.
+Megjegyzés: A kvantilisek (percentilisek) lokálisan kerülnek kiszámításra, és aggregálásuk korlátozott.
+
+4. Histograms – Eloszlás kategóriák szerint
+A histogram metrika az értékeket előre definiált intervallumokba (bucketekbe) sorolja. Ez lehetővé teszi az eloszlás kategóriák szerinti elemzését.
+
+Prometheus metrika példa:
+
+http_request_duration_seconds_bucket{le="0.05"} 4599
+
+Ez azt jelzi, hogy 4599 kérés volt, amelynek időtartama ≤ 0.05 másodperc.
+
+Kvantilis számítás hisztogramból:
+
+histogram_quantile(
+  0.9,  // 90%-os kvantilis
+  sum by(path, method, le) (
+    rate(http_request_duration_seconds_bucket[5m])
+  )
+)
+
+Használat: válaszidő, feldolgozási idő eloszlása aggregálható módon (ellentétben a summary-vel).
+
+Összegzés
+Típus		Leírás					Növekedés / Csökkenés	Percentilis / Kvantilis		Aggregálhatóság
+Gauge		Állapotmetrika (bármerre változhat)	✅	  / ✅		❌				✅
+Counter		Eseményszámláló (csak növekszik)	✅	  / ❌		❌				✅
+Summary		Percentilisek kiszámítása lokálisan	✅	  / ❌		✅				❌ (nem aggregálható)
+Histogram	Értékek intervallumokban		✅	  / ❌		✅ (histogram_quantile)		✅
+
+# PromQL Adatkiválasztás – Instant és Range Vectorok, Offsetek, Időbélyegek
+A PromQL lekérdezésekben különböző típusú vektorokat használunk attól függően, milyen adatokat szeretnénk kinyerni.
+
+1. Instant Vector Selector – Egy adott időpontra vonatkozó értékek
+Ez a leggyakoribb forma: egy adott időpillanatban mért értékeket kérdez le.
+demo_memory_usage_bytes
+
+Szűrés címkék alapján:
+demo_memory_usage_bytes{type=~"buffers|cached"}			       // buffers vagy cached típus
+demo_memory_usage_bytes{type!~"buffers|cached"}			       // nem buffers és nem cached
+demo_memory_usage_bytes{type!~".*uff.*"}			       // nem tartalmazza az "uff" szót
+demo_memory_usage_bytes{type!="free",instance="demo-service-0:10000"}  // összetett feltétel
+
+# 2. Range Vector Selector – Időintervallumra vonatkozó értékek
+A range vector az értékek sorozatát adja vissza egy adott időintervallumban.
+
+demo_cpu_usage_seconds_total[1m]   // Hiba: önmagában range vector nem lekérdezhető (aggregáció vagy függvény szükséges)
+
+! Fontos: A range vector típus nem adható vissza önmagában, csak egy függvénnyel együtt.
+
+Példa helyes használatra:
+
+rate(demo_cpu_usage_seconds_total[1m])   // 1 perces időszak alatti növekedési ráta
+
+3. Offset használata – Relatív időeltolás
+Az offset kulcsszó segítségével egy metrika korábbi állapotát kérdezhetjük le.
+
+demo_memory_usage_bytes offset 2m   // az érték lekérdezése 2 perccel ezelőtti állapotra
+
+4. Absolute timestamps (időbélyeg alapú lekérdezés)
+Az @ szintaxis egy adott időbélyegre (Unix timestamp) vagy időhatárra hivatkozik.
+
+demo_memory_usage_bytes @ 1684694074        // konkrét időbélyeg
+demo_memory_usage_bytes @ start()           // a lekérdezési időintervallum eleje
+demo_memory_usage_bytes @ end()             // a lekérdezési időintervallum vége
+
+5. Kombinációk – Offset + Timestamps + Range
+Lehetőség van ezek kombinálására is:
+
+demo_memory_usage_bytes{instance="demo.promlabs.com:10000"}[1m] offset 1h @ 1684694074
+
+Ez a lekérdezés azt kéri le, hogy 1 perces időablakban, az 1 órával korábbi állapotból, milyen értékek voltak a 1684694074-es időbélyegen.
+
+6. Staleness Handling – "Elöregedett" metrikák kezelése
+A Prometheus automatikusan felismeri a "stale" (elavult) időpontokat, ha egy metrika már nem frissül. Ilyenkor nem jelenik meg érték, vagy NaN-t (not a number) ad vissza.
+Ez akkor fontos, ha például egy szolgáltatás megszűnt adatot küldeni – a Prometheus 5 percen belül automatikusan eltávolítja az aktív metrikák közül.
+
+# Összegzés – Gyakori fogalmak:
+Fogalom			Leírás
+Instant Vector		Egy pillanatban vett minták
+Range Vector		Minták sorozata időablakban
+Offset			Relatív időeltolás (pl. 1h-val korábban)
+@ timestamp		Abszolút időpont (Unix timestamp alapján)
+Staleness		Automatikus adat-öregedés kezelése
+rate(), irate()		Változások mértéke idő szerint
+start(), end()		Lekérdezési ablak eleje/vége
 
 folyt köv....
