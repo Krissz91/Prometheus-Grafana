@@ -238,4 +238,58 @@ Staleness		Automatikus adat-öregedés kezelése
 rate(), irate()		Változások mértéke idő szerint
 start(), end()		Lekérdezési ablak eleje/vége
 
+# 1. Mi az a counter típus?
+Egy counter mindig csak növekszik (pl. kérések száma, hibák száma).
+Soha nem csökken – kivéve, ha a szolgáltatás újraindul (és akkor visszaugrik 0-ra).
+Példa metrika:
+
+demo_api_request_duration_seconds_count{status="200"}
+
+Ez azt mutatja, hány HTTP 200 sikeres válasz történt összesen az indulás óta.
+
+# 2. Mit csinál az increase()?
+increase(<counter_metric>[időablak])
+Ez azt mutatja meg, hogy mekkora volt a növekedés a kiválasztott időszakban.
+Példa:
+
+increase(demo_api_request_duration_seconds_count{status="200"}[5m])
+
+Azt mutatja: az elmúlt 5 percben hány sikeres API kérés volt (status=200).
+Ha 5 perccel ezelőtt 1000 volt, most pedig 1200 -> increase = 200
+Ha újraindult a szerver, és nulláról indult újra -> Prometheus ezt felismeri, és nem von le tévesen nagy értékeket
+
+# 3. Mit csinál a rate()?
+rate(<counter_metric>[időablak])
+Ez sebességet számol – érték / másodperc.
+Példa:
+
+rate(demo_api_request_duration_seconds_count{status="200"}[5m])
+
+Ez azt mutatja: átlagosan másodpercenként hány sikeres kérés történt az elmúlt 5 percben
+Előny: Szép, simított grafikonokhoz használják
+Hátrány: nehéz pontosan értelmezni (pl. 1.2 -> másodpercenként 1.2 kérés átlagosan)
+
+# 4. Mikor melyiket használd?
+
+Cél							Használd ezt
+Összes esemény egy időszakon belül			increase(...)
+Átlagos sebesség / másodperc				rate(...)
+Grafikonhoz, trendhez					rate(...)
+Pontos értékekhez (pl. 5 perc alatt mennyi történt)	increase(...)
+
+5. Mi van, ha újraindul a szolgáltatás?
+A counter visszaugrik nullára, de:
+rate() és increase() automatikusan korrigálnak
+Ha egy 500-as érték hirtelen 0-ra vált, azt nem tekinti csökkenésnek
+Ezért fontos, hogy a metrika típusa tényleg counter legyen, különben félreérti
+
+# 6. Mit jelent ez a példa?
+
+increase(demo_api_request_duration_seconds_count{status="200"}[5m])
+
+Az elmúlt 5 percben hány sikeres API válasz történt (HTTP 200-as).
+Gyakorlati haszna:
+  Grafikonon láthatod a terhelést időben
+  Riasztást állíthatsz be: „ha 5 perc alatt 0 kérés érkezett, akkor baj van”
+
 folyt köv....
