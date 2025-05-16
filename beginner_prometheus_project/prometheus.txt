@@ -292,4 +292,90 @@ Gyakorlati haszna:
   Grafikonon láthatod a terhelést időben
   Riasztást állíthatsz be: „ha 5 perc alatt 0 kérés érkezett, akkor baj van”
 
+# 1. up{...} – Az életjel-metrika
+Átírjuk a yaml fájlt
+sudo nano /etc/prometheus/prometheus.yml
+
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets:
+        - localhost:9090
+  - job_name: test-job
+    static_configs:
+      - targets:
+        - localhost:8080
+
+Ez a legfontosabb automatikus (synthetic) metrika, amit a Prometheus minden céltól gyűjt. Azt mutatja meg:
+
+Érték	Jelentés
+1	A cél elérhető, válaszolt
+0	A cél nem érhető el, vagy hiba történt	
+
+Példa:
+
+up{job="test-job"}
+
+Ha = 0, az azt jelenti: nem fut semmi a localhost:8080 címen.
+
+# 2. scrape_duration_seconds
+Ez megmutatja, hogy mennyi ideig tartott a lekérés az adott céltól.
+Ha a cél elérhetetlen, általában nagyon kicsi szám, vagy 0, mert gyorsan visszajön a hiba.
+
+# 3. scrape_samples_scraped
+Ennyi mintát/metrikát sikerült “lekaparni” (scrape) az adott szolgáltatástól.
+Ha a cél nem ad vissza semmit (pl. nem fut semmi), akkor:
+
+scrape_samples_scraped = 0
+
+# 4. scrape_samples_post_metric_relabeling
+Ez azt mutatja meg, hogy a metrika relabeling szabályok (ha vannak) után mennyi minta maradt.
+Ha nincs relabeling, ez megegyezik az előző értékkel (vagy nulla, ha nem volt válasz).
+
+# 5. scrape_series_added
+Ez az érték azt mutatja, hogy hány új idősort (time series-t) adott hozzá a Prometheus a tárolójához a scrape során.
+Ha 0 -> vagy nem volt új adat, vagy nem sikerült elérni a célt.
+
+# Ezek honnan származnak?
+Ezek automatikusan generált mutatók, amiket a Prometheus saját maga hoz létre minden célhoz, nem a cél szolgáltatásai küldik vissza!
+Ezek alapján tudod ellenőrizni például:
+  Melyik szolgáltatás elérhető?
+  Melyik mikor omlott le?
+  A scrape műveletek gyorsak vagy lassúak?
+  Mennyire stabil a monitorozott rendszer?
+
+# Mit tehetsz velük?
+Gyakorlati példa:
+
+1. Alert (riasztás) létrehozása:
+
+up == 0
+
+Ha egy cél DOWN, erről tudsz alert-et küldeni e-mailen, Slacken, stb. pl. Alertmanagerrel.
+
+2. Grafikon a scrape időkről:
+
+avg_over_time(scrape_duration_seconds[1m])
+
+Ez megmutatja, ha pl. egy szolgáltatás lassan válaszol – hasznos teljesítménydiagnosztikához.
+
+# 3. Hibás scrape-ek figyelése:
+
+increase(scrape_samples_scraped[5m]) == 0
+
+Ha egy cél 5 percen belül semmit nem adott vissza, az is intő jel.
+
+Összefoglalás – up és barátai
+Metrika					Mit mutat
+up					A cél elérhető-e (1 vagy 0)
+scrape_duration_seconds			Lekérés ideje
+scrape_samples_scraped			Hány minta jött
+scrape_samples_post_metric_relabeling	Minta relabeling után
+scrape_series_added			Hány új sor került be
+
+Ezek mindig jelen vannak minden scrape_configs-ban szereplő target esetén – még akkor is, ha maga a cél nem ad vissza metrikát!
+
 folyt köv....
