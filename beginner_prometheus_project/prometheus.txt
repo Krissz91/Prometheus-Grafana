@@ -564,6 +564,225 @@ Mentés:
   Adj nevet a dashboardnak
   Készen is vagy!
 
+# Monitoring Linux Host Metrics with Prometheus---------------------------------------------------------------------
+Node Exporter – Telepítés, konfigurálás, lekérdezés, megjelenítés Grafanában
 
+1. Node Exporter letöltése és futtatása
+Töltsd le a Node Exporter-t:
+Lépj a hivatalos oldalra:
+https://prometheus.io/download/#node_exporter
+Kattints a legfrissebb release linkre.
+
+Telepítés terminálon keresztül:
+mkdir ~/node_exporter
+cd ~/node_exporter
+wget https://github.com/prometheus/node_exporter/releases/download/v1.9.1/node_exporter-1.9.1.linux-amd64.tar.gz
+tar -xvzf node_exporter-1.9.1.linux-amd64.tar.gz
+cd node_exporter-1.9.1.linux-amd64
+./node_exporter --help
+
+--collector.filesystem.fs-types-exclude=... kapcsolóval kizárhatunk olyan fájlrendszereket, amik nem relevánsak (pl. proc, sysfs, tmpfs, konténeres mountok).
+
+További infó:
+https://github.com/prometheus/node_exporter
+
+Node Exporter elindítása:
+
+./node_exporter
+
+Ezután a metrikák elérhetőek:
+http://<szerver_ip>:9100/metrics
+Pl.: http://192.168.1.163:9100/metrics
+
+Kereséshez használd a Ctrl+F (vagy Mac-en Cmd+F) funkciót a böngészőben, pl.: memory, cpu, disk.
+
+2. Prometheus konfigurálása a Node Exporter monitorozásához
+Nyisd meg a Prometheus konfigurációs fájlt:
+
+sudo nano /etc/prometheus/prometheus.yml
+Add hozzá az új „node” job-ot:
+
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "node"
+    static_configs:
+      - targets: ["localhost:9100"]
+
+Indítsd újra a Prometheust:
+
+sudo systemctl restart prometheus
+
+Látogasd meg:
+http://localhost:9090 vagy http://192.168.1.163:9090
+
+Navigálj a Status -> Targets oldalra. Ha minden jól működik, a node job státusza UP.
+
+3. Prometheus lekérdezések kipróbálása (PromQL)
+Menj vissza a Prometheus -> Graph fülre és próbálj ki néhány lekérdezést:
+
+rate(node_cpu_seconds_total[1m])
+rate(node_network_receive_bytes_total[1m])
+rate(node_disk_read_bytes_total[1m])
+
+Ezek a lekérdezések időalapú változásokat mutatnak CPU, hálózati vagy diszk aktivitás alapján.
+
+4. Grafana Dashboard létrehozása Node Exporter-hez
+Nyisd meg Grafanát:
+http://localhost:3000 vagy http://192.168.1.163:3000
+
+Dashboard importálása:
+  Menj a Dashboard -> New -> Import fülre
+  Írd be a keresőmezőbe: 1860 (ez egy hivatalos Node Exporter dashboard ID)
+  Kattints a Load gombra
+  Válaszd ki a korábban hozzáadott Prometheus forrást (Demo Prometheus)
+  Kattints az Import gombra
+
+Ezután automatikusan megjelenik egy részletes dashboard CPU, memória, diszk és hálózati metrikákkal.
+
+Váltás időintervallumra:
+Fent állítsd a nézetet: Last 1 hour, Last 15 minutes, stb.
+
+Összefoglalás:
+Komponens	Szerep
+Node Exporter	A gép rendszeres erőforrásairól szolgáltat metrikákat (/metrics)
+Prometheus	Metrikák lekérdezése, tárolása, elemzése
+Grafana		Grafikus felület, vizualizáció dashboardokon keresztül
+
+#Kerüld el ezt a 6 gyakori Prométheusz hibát--------------------------------------------------------------------
+
+1. Cardinality Bombs – Vigyázz a címkékkel!
+A Prometheus idősorokat címkék (labels) alapján különbözteti meg,
+de ha túl sok különböző címkeértéket (ún. high cardinality) adsz,
+akkor szó szerint "felrobbantod" a Prometheus-t: memóriaproblémák, lekérdezési lassulás, instabilitás.
+
+Példa egy jó címkézésre:
+
+http_requests_total{method="POST"}
+http_requests_total{method="GET"}
+
+Ez még oké.
+Példa egy cardinality bombára:
+
+http_requests_total{method="POST", user_id="1"}
+http_requests_total{method="POST", user_id="2"}
+http_requests_total{method="POST", user_id="10000000"}
+
+Több millió különböző user_id érték milliószámra szaporítja az idősorokat!
+
+Tipp:
+Soha ne használj dinamikusan változó címkéket: user_id, session_id, uuid, ip, timestamp.
+Gondolkodj aggregációban, ne egyéni eseményekben.
+
+2. Túl sok címke aggregálása – Veszélyes aggregáció
+
+Ha így írod a lekérdezést:
+
+sum(rate(errors_total{job="my-job"}[5m])) > 10
+
+akkor az összes címkét eldobod, pedig ezek kellenének például:
+  Alertmanager-ben történő csoportosításhoz, némításhoz.
+  Grafana dashboardon szűréshez, címkézett riasztásokhoz.
+
+Helyes forma:
+
+sum by(job) (
+  rate(errors_total{job="my-job"}[5m])
+) > 10
+
+vagy még jobb:
+
+sum without(instance) (
+  rate(errors_total{job="my-job"}[5m])
+) > 10
+
+Így megtartod a fontos címkéket (job, service, stb.), de kiszűröd a zajosat (instance).
+
+3. Unscoped selectors – Csupasz metrikák
+Ez a tipikus hiba:
+
+rate(error_total[5m]) > 10
+
+Miért rossz?
+  Lehet, hogy több szolgáltatásban is van ilyen nevű metrika – teljesen más jelentéssel.
+  Könnyen hozhat rossz adatot, ha valaki új metrikát publikál hasonló névvel.
+
+Használj szűk szelektorokat:
+
+rate(error_total{job="auth-service"}[5m]) > 10
+
+Mindig specifikáld: job, instance, environment, namespace, stb.
+
+4. Missing for – Nincs időtartam a riasztáshoz
+Ez itt egy instabil, azonnal triggerelő szabály:
+
+alert: InstanceDown
+expr: up == 0
+
+Ez pedig sokkal megbízhatóbb:
+
+alert: InstanceDown
+expr: up == 0
+for: 5m
+
+Miért kell a for:?
+  Kis hálózati ingadozások, újraindulások, átmeneti hibák ne indítsanak felesleges riasztásokat.
+  Adj toleranciát a rendszerednek!
+
+5. Túl rövid rate() ablak – Zajos adatok
+Ez a lekérdezés zajos és megbízhatatlan:
+
+rate(my_counter[30s])
+
+A rövid ablak nem simítja ki a fluktuációkat.
+Túl gyakori mintavétel túlérzékenyé teszi a riasztást.
+
+Ajánlott:
+Általános: rate(xxx[5m])
+Stabil rendszerekhez: rate(xxx[10m])
+Nagy forgalmú metrikáknál: rate(xxx[1m])
+
+6. Függvények rossz metrikatípussal
+Ez HIBÁS:
+
+rate(memory_usage_bytes[5m])
+
+Miért?
+Mert a memóriahasználat egy gauge típusú metrika, nem counter. A rate() csak counterre működik helyesen.
+
+Szabály:
+Counter -> rate() / increase()
+
+Gauge -> deriv() / predict_linear()
+
+Példák:
+Counter-hez:
+
+rate(http_requests_total[5m])
+increase(errors_total[10m])
+
+Gauge-hoz:
+
+deriv(memory_usage_bytes[5m])
+predict_linear(memory_usage_bytes[5m], 10 * 60)
+
++1 Bónusz hiba: Ne próbáld meghackelni a metrikát!
+Ne próbálj számolót emulálni gauge-al, vagy fordítva.
+Ha például a logikád nem illik az adattípushoz, inkább módosítsd a metrika forrását,
+ne PromQL-lel próbálj workaround-olni.
+
+Összegzés – Mire figyelj mindig?
+Hiba típusa		Tipp
+Cardinality bomb	Ne használj egyedi, dinamikus értékeket címkében
+Rossz aggregáció	Használj sum by() vagy sum without()
+Rossz szelektor		Határozd meg job, instance, env stb.
+Hiányzó for:		Mindig adj időtartamot a riasztásokhoz
+Rövid ablak		Ne használd 1 percnél rövidebb rate() ablakot
+Rossz típus		rate() = counter; deriv() = gauge
 
 folyt köv....
