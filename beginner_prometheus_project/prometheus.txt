@@ -785,4 +785,80 @@ Hiányzó for:		Mindig adj időtartamot a riasztásokhoz
 Rövid ablak		Ne használd 1 percnél rövidebb rate() ablakot
 Rossz típus		rate() = counter; deriv() = gauge
 
+# Egyéni gazdagép-metrikák közzététele Prometheus Node Exporter segítségével
+Textfile Collector modul használata .prom fájlokkal
+
+A Node Exporter egy speciális gyűjtőmodult kínál, a textfile collectort,
+amely lehetővé teszi, hogy saját egyéni metrikákat publikáljunk szöveges .prom fájlokon keresztül.
+
+Ez tökéletes megoldás:
+  egyedi cron job-ok figyelésére,
+  szkriptek által mért értékek (pl. biztonsági mentés ideje),
+  vagy bármilyen, nem szabványos, rendszer által nem gyűjtött adat rögzítésére.
+
+1. Előkészületek
+Hozzunk létre egy mappát, ahol a .prom fájlokat tároljuk:
+
+mkdir textfile
+
+Ezután indítsuk el a Node Exportert úgy, hogy megadjuk neki ezt a könyvtárat:
+
+./node_exporter --collector.textfile.directory=./textfile
+
+(Alternatív megoldás: rendszerkonfigban --collector.textfile.directory=/var/lib/node_exporter/textfile_collector)
+
+2. Egyéni metrika létrehozása
+Készítsünk egy .prom fájlt, amely tartalmazza az egyéni metrikát a Prometheus szabványos szöveges formátumában:
+
+echo cron_job_last_run_timestamp_seconds $(date +%s) > ./textfile/cron.prom.$$
+mv ./textfile/cron.prom.$$ ./textfile/cron.prom
+
+Ez egy egyszerű példa, ahol a cron_job_last_run_timestamp_seconds metrika értéke
+az aktuális Unix timestamp lesz (másodpercben).
+
+3. Metrika ellenőrzése böngészőben
+A Node Exporter metrikái ezután elérhetők lesznek a böngészőben:
+
+http://192.168.1.163:9100/metrics
+Keresd meg a saját metrikádat:
+
+# HELP cron_job_last_run_timestamp_seconds Last run time of cron job
+# TYPE cron_job_last_run_timestamp_seconds gauge
+cron_job_last_run_timestamp_seconds 1715612345
+
+4. Lekérdezés Prometheusból
+Ha a Prometheus már figyeli a Node Exportert, akkor egyszerűen lekérdezheted az új metrikát:
+
+cron_job_last_run_timestamp_seconds
+
+Például lekérdezheted, mikor futott utoljára egy cron job, vagy akár riasztást is építhetsz rá:
+
+alert: CronJobNotRunRecently
+expr: time() - cron_job_last_run_timestamp_seconds > 3600
+for: 5m
+labels:
+  severity: warning
+annotations:
+  summary: "Cron job has not run in the last hour"
+
+Fontos megjegyzések
+  A .prom fájlokat automatikusan kell generálni, ne kézzel szerkeszd.
+  A fájlformátum szigorú: minden sor egy Prometheus metrikát kell, hogy tartalmazzon a szokásos name value [timestamp] formában.
+  A mv használata biztosítja, hogy ne olvassa a Prometheus a fájlt, amíg az még íródik.
+  Minden egyéni metrikád gauge típus legyen (nem counter), kivéve, ha explicit növekvő értékeket figyelsz.
+
+Bónusz: Automatikus frissítés cronból
+
+*/5 * * * * echo cron_job_last_run_timestamp_seconds $(date +\%s) > /path/to/textfile/cron.prom.$$ && mv /path/to/textfile/cron.prom.$$ /path/to/textfile/cron.prom
+
+Ez a cron job 5 percenként frissíti a metrikát. Ha valami megszűnik frissülni, a Prometheus figyelheti, hogy “beragadt” a metrika.
+
+Összefoglalás:
+Lépés				Mit csinál
+textfile mappa			Itt lesznek a metrikák .prom fájlban
+.prom fájl			Metrika formátuma: name value
+Node Exporter indítása		--collector.textfile.directory=...
+Ellenőrzés			curl http://<host>:9100/metrics
+Prometheus			Lekérdezés ugyanúgy működik, mint más metrikák esetén
+
 folyt köv....
