@@ -378,4 +378,192 @@ scrape_series_added			Hány új sor került be
 
 Ezek mindig jelen vannak minden scrape_configs-ban szereplő target esetén – még akkor is, ha maga a cél nem ad vissza metrikát!
 
+# Mik azok a hisztogramok a Prometheusban?---------------------------------------------------------
+A hisztogram egy metrikatípus, amely megmutatja, hogy egy érték milyen
+eloszlás szerint jelenik meg egy adott időszak alatt.
+Tipikusan válaszidők, kérésidők, feldolgozási idők mérésére használják.
+
+A hisztogram három fő részből áll:
+1. *_bucket – hány darab esemény esett egy adott idő alá (küszöb, le = less than or equal).
+2. *_sum – az összes érték összege (pl. összes válaszidő).
+3. *_count – összesen hány esemény történt.
+
+Miért hasznos a hisztogram?
+Mert nemcsak az átlagot tudjuk nézni, hanem a eloszlást is. Például:
+  Mennyire gyakoriak a lassú válaszok?
+  A kérések hány százaléka esik 100ms alá?
+  Mennyi a 90. percentilis (p90) válaszidő – vagyis az az érték, amelynél a kérések 90%-a gyorsabb volt?
+Ez a fajta elemzés kulcsfontosságú például SLA-k, felhasználói élmény és rendszerhangolás szempontjából.
+
+Hogyan jelennek meg ezek az adatok?
+Vegyük ezt az egyszerű példát:
+⬆ count ➡ duration(ms)
+
+request_duration_seconds_bucket{le="0.025"} 31
+request_duration_seconds_bucket{le="0.05"} 63
+request_duration_seconds_bucket{le="0.1"} 168
+request_duration_seconds_bucket{le="0.25"} 785
+request_duration_seconds_bucket{le="+Inf"} 1000
+
+request_duration_seconds_sum 180.43
+request_duration_seconds_count 1000
+
+Ez azt jelenti:
+  31 kérés volt 25ms alatt
+  63 kérés volt 50ms alatt
+  ...
+  összesen 1000 kérés történt
+  ezek összesített válaszideje 180.43 másodperc volt
+A bucketek halmozottak (azaz a le="0.1" tartalmazza a le="0.05" és le="0.025" értékeit is).
+
+Hogyan lehet lekérdezni őket PromQL-ben?
+histogram_quantile(φ, rate(...))
+Ez a kulcs! A Prometheus nem számol quantile-okat automatikusan –
+de a histogram_quantile() függvény segítségével becsülheted őket. Példák:
+
+90. percentilis válaszidő:
+
+histogram_quantile(0.9, rate(request_duration_seconds_bucket[5m]))
+
+Ez azt jelzi, hogy az elmúlt 5 percben a kérések 90%-a milyen válaszidő alatt teljesült.
+
+Egyesítve több dimenzió mentén (pl. status, method, path):
+
+histogram_quantile(0.9, sum by(le) (rate(request_duration_seconds_bucket[5m])))
+
+Konkrét útvonalra:
+
+demo_api_request_duration_seconds_bucket{instance="demo-service-0:10000",status="500",method="POST",path="/api/foo"}
+
+Ezzel szűrsz egy adott API endpoint-ra és hibakódra.
+
+Átlagos válaszidő számítása
+Ez kicsit trükkös, de az alábbi képlet segít:
+
+rate(demo_api_request_duration_seconds_sum[5m])
+/
+rate(demo_api_request_duration_seconds_count[5m])
+
+Ez lényegében az átlagos válaszidő az elmúlt 5 percben.
+
+Megjegyzések:
+  A rate() mindig időablakon belüli mértékeket ad (pl. 5 perc).
+  A increase() inkább akkor hasznos, ha szakaszok összegét szeretnéd látni.
+  A hisztogramok akkor igazán hasznosak, ha jó bin-kiosztást választasz (le értékek).
+  A +Inf bucket minden eseményt tartalmaz, tehát ugyanannyit mutat, mint a *_count.
+
+Összegzés:
+Fogalom					Jelentés
+*_bucket{le="0.1"}			Azon események száma, melyek legfeljebb 0.1s hosszúak voltak
+*_sum					Az események összesített értéke
+*_count					Az események száma
+histogram_quantile(0.9, rate(...))	Becslés a 90. percentilisre
+rate(sum / count)			Átlag érték egy időablakra
+
+# Grafana Dashboard készítés Prometheus adatokhoz-----------------------------------------------------
+Grafana telepítése
+
+1. Dockerrel (ajánlott teszteléshez)
+
+docker run -d -p 3000:3000 --name=grafana -v grafana-storage:/var/lib/grafana grafana/grafana
+
+2. Letöltés bináris fájlként (Linux)
+  Nyisd meg: grafana.com/download
+  Válaszd:
+    Edition: OSS → Linux → Download .tar.gz
+
+mkdir grafana && cd grafana
+wget https://dl.grafana.com/oss/release/grafana-12.0.0.linux-amd64.tar.gz
+tar -zxvf grafana-12.0.0.linux-amd64.tar.gz
+cd grafana-12.0.0/
+./bin/grafana-server
+
+A conf/ könyvtárban található a konfiguráció (alapértelmezett port: 3000)
+A bin/ könyvtárban a futtatható szerverfájl
+
+Grafana használata böngészőből
+Cím: http://localhost:3000 vagy http://<szerver_ip>:3000
+
+Belépés:
+Felhasználó: admin
+Jelszó: admin
+
+Első belépésnél átugorható a jelszócsere (demo/lab esetén)
+
+Prometheus adatforrás hozzáadása
+  Configuration -> Data sources -> Add data source
+  Válaszd ki a Prometheus-t
+  Állítsd be:
+    Name: Demo Prometheus
+    URL: http://localhost:9090 vagy http://<szerver_ip>:9090
+  Alul: Save & test
+
+Új dashboard létrehozása
+1. Panel hozzáadása
+  Dashboard -> New Dashboard -> Add visualization
+  Visualization típusa: pl. Time series
+  Jobb oldalt 3 fül:
+    Visualization
+    Data -> Queries
+    Panel options
+
+Példa: 95. percentilis válaszidő lekérdezése
+Data Queries fül:
+  Metrika: demo_api_request_duration_seconds_bucket
+  Kattints: hint: add histogram_quantile()
+Hagyjuk a rate intervallumot: rate(...)
+sum by(le, path, method)
+Állítsuk a Quantile értékét: 0.95
+Nyomj Run queries-t
+
+Kód nézet (jobb fent "Code" gomb):
+
+histogram_quantile(0.95, sum by(le, path, method) (rate(demo_api_request_duration_seconds_bucket[$__rate_interval])))
+
+Legend: Custom -> {{path}} {{method}}
+Panel options:
+  Title: 95th Percentile Request Latency
+  Unit: Time -> seconds
+
+Példa: CPU-használat Gauge panel
+  Visualization: Gauge
+  Query (Code nézet):
+
+sum by(instance) (rate(demo_cpu_usage_seconds_total{mode!="idle"}[5m]))
+/
+on(instance) group_left() demo_num_cpus
+
+Panel Options:
+  Min: 0
+  Max: 1
+  Unit: Percent (0.0 – 1.0)
+  Threshold: Red at 0.8
+  Title: Instance CPU Usage
+
+Példa: Top 3 legnagyobb lekérés gyakoriság (Table panel)
+  Visualization: Table
+  Query (Code):
+
+topk(3, sum by(path, method) (rate(demo_api_request_duration_seconds_count[5m])))
+
+Panel Options:
+  Format: Table
+  Legend: pl. {method="POST", path="/api/foo"}
+  Transform -> Organize fields -> rejt el felesleges mezőket (pl. Time)
+  Field override: Unit = req/sec (rps)
+  Title: Top 3 Request Rates
+
+Sorok és szekciók hozzáadása
+  Add new row -> Add panelt húzd be a sorba
+  Row beállítások (fogaskerék):
+    Cím: pl. HTTP Status vagy CPS Status
+  Panelek átrendezhetők, összecsukhatók
+
+Mentés:
+  Jobb felső sarok → Save dashboard
+  Adj nevet a dashboardnak
+  Készen is vagy!
+
+
+
 folyt köv....
