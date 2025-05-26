@@ -1,0 +1,428 @@
+# 1. Prometheus telepítése Windows rendszeren
+  Cél: Lokális tanuláshoz megfelelő, nem ideális éles környezethez.
+  Telepítési lépések:
+    1. Lépj a https://prometheus.io/download oldalra.
+    2. Válaszd ki a Windows ZIP csomagot.
+    3. Csomagold ki -> futtasd a .\prometheus.exe fájlt parancssorból.
+    4. Konfigurációs fájl: prometheus.yml – nem szükséges módosítani lokálisan.
+    5. Web UI: elérhető a http://localhost:9090 címen.
+  Ha bezárod a parancssort, újra kell indítani a .exe fájlt.
+
+# 2. Prometheus telepítése Mac OS rendszeren
+  Homebrew használata ajánlott:
+    Ellenőrzés: brew --version
+    Telepítés: brew install prometheus
+  HTTPS tanúsítványok:
+    Alapértelmezetten self-signed tanúsítványokat használ.
+    A Grafana nem fogadja el ezeket -> javasolt kikommentezni.
+  Alapértelmezett bejelentkezés:
+    Felhasználónév: admin
+    Jelszó: password
+  Konfiguráció: prometheus.yml
+  Web UI: elérhető a http://localhost:9090 címen (javasolt HTTP használata tanuláshoz).
+
+# 3. Prometheus telepítése Linux (Ubuntu) alatt
+  Letöltés a Prometheus oldalról, a megfelelő architektúra kiválasztásával (pl. amd64, arm64).
+  Telepítési lépések:
+    1. Lépj a https://prometheus.io/download oldalra.
+       -> operating system = linux -> Architecture = Pl.: amd64 (uname -a, arch paranccsal ellenőrízheted) -> copy link address
+    2. wget használatával letöltés.
+
+	sudo apt update
+	sudo apt upgrade
+	sudo apt install wget	# ha nincs
+	sudo wget https://github.com/prometheus/prometheus/releases/download/v3.4.0/prometheus-3.4.0.linux-amd64.tar.gz
+
+    3. useradd, groupadd: saját prometheus felhasználó és csoport létrehozása
+
+	sudo groupadd --system prometheus
+	sudo useradd -s /sbin/nologin --system -g prometheus prometheus
+
+    4. Mappák létrehozása (/etc/prometheus, /var/lib/prometheus).
+
+	sudo mkdir /var/lib/prometheus
+	sudo mkdir -p /etc/prometheus/rules
+	sudo mkdir -p /etc/prometheus/rules.s
+	sudo mkdir -p /etc/prometheus/files_sd
+
+    5. tar segítségével kicsomagolás.
+
+	sudo tar xvf prometheus-3.4.0.linux-amd64.tar.gz
+	cd prometheus-3.4.0.linux-amd64/
+
+    7. Bináris fájlok és konfigurációk áthelyezése a megfelelő helyre.
+
+	sudo mv prometheus promtool /usr/local/bin/
+	sudo cp prometheus.yml /etc/prometheus/
+	
+    8. systemd szolgáltatásfájl létrehozása Prometheus futtatásához automatikusan induláskor.
+
+	prometheus --version
+	sudo tee /etc/systemd/system/prometheus.service<<EOF
+
+[Unit]
+Description=Prometheus
+Documentation=https://prometheus.io/docs/introduction/overview/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --web.listen-address=0.0.0.0:9090 \
+  --web.external-url=
+
+SyslogIdentifier=prometheus
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    9. Jogosultságok beállítása (chown, chmod).
+
+	sudo chown -R prometheus:prometheus /etc/prometheus/
+	sudo chown -R prometheus:prometheus /etc/prometheus/*
+	sudo chmod -R 775 /etc/prometheus/
+	sudo chmod -R 775 /etc/prometheus/*
+	sudo chown -R prometheus:prometheus /var/lib/prometheus/
+
+    10. Szolgáltatás indítása: systemctl start prometheus, majd enable és status.
+
+	sudo systemctl daemon-reload
+	sudo systemctl start prometheus
+	sudo systemctl enable prometheus
+	sudo systemctl status prometheus
+
+    11. Nyizsd me abongeszot es ird be pl.: http://192.168.56.14:9090/
+        # ip cím eltérhet sőt bíztos...ha nem vm-ben csináltad akkor http://localhost:9090/
+
+# 4. Metrikák gyűjtése (Unix, Linux, Mac)
+   Ha van saját alkalmazásod:
+     Használhatsz Prometheus kliens könyvtárakat (Python, Java, .NET, stb.)
+     Az alkalmazás metrikákat publikál API-n keresztül → Prometheus lehúzza (scrape).
+   Ha nincs hozzáférés a forráskódhoz (pl. MySQL, IoT, HAProxy):
+     Írhatsz szkripteket (pl. bash, PowerShell) → de nem skálázható.
+     Jobb megoldás: használd az exporter-eket.
+   Exporter:
+     Egy köztes komponens, amely kiolvassa az adatokat a célrendszerből (pl. DB, OS).
+     Prometheus a scrape művelettel lehúzza az adatokat.
+     Alapértelmezett scrape idő: 15 másodperc.
+   Push Gateway:
+     Megoldás olyan alkalmazásokhoz, amelyek nem folyamatosan futnak vagy nem elérhetők scrape-elésre.
+     Az alkalmazás metrikákat push-ol a push gateway-re, majd a Prometheus scrape-eli a push gateway-t.
+     Fontos: Prometheus továbbra is pull-alapú, a push gateway csak köztes tároló.
+
+Hasznos fogalmak:
+Fogalom		Jelentés
+Scrape		Prometheus lekéri az adatokat (API-n keresztül).
+Exporter	Komponens, ami lehetővé teszi Prometheus számára a lekérést.
+Push Gateway	Köztes tárhely push alapú alkalmazásoknak.
+Prometheus.yml	Konfigurációs fájl, itt állítható be scrape config is.
+
+# 5–6. Node Exporter – telepítése (Linux, Mac)
+       Node Exporter nem egyenlő Node.js-el – "node" = Unix-alapú gép.
+       Célja: CPU, memória, diszk, hálózat, stb. metrikák gyűjtése.
+       Hivatalos Prometheus exporter, de léteznek nem hivatalos 3rd-party exporterek is.
+
+Telepítés lépései (Linux/macOS):
+  Töltsd le a Prometheus weboldaláról (node_exporter).
+    https://prometheus.io/download/#node_exporter -> copy link address
+  Csomagold ki (tar -xvf ...).
+   Lépj be az application_service linuxba
+
+sudo apt update
+sudo apt upgrade
+sudo wget https://github.com/prometheus/node_exporter/releases/download/v1.9.1/node_exporter-1.9.1.linux-amd64.tar.gz
+sudo tar -xvf node_exporter-1.9.1.linux-amd64.tar.gz
+
+  Futtasd a binárist: ./node_exporter
+
+cd node_exporter-1.9.1.linux-amd64/
+./node_exporter
+
+  # Ezzel az a gond, hogy nem tudjuk használni a linuxot mert a szolgaltatás nem a hátterben futt.
+  # Alapértelmezett port: 9100
+
+  Webes elérés: http://<ip>:9100/metrics
+    pl.: http://192.168.56.11:9100/
+
+Biztonság:
+  A 9100-as port csak Prometheus számára legyen elérhető (pl. security group alapján AWS-ben).
+
+# 7. Prometheus konfigurálása Node Exporter-hez
+     Csatlakozz a Prometheus szerverhez (SSH).
+     Nyisd meg a konfigurációs fájlt:
+       sudo nano /etc/prometheus/prometheus.yml
+     A scrape_configs szekcióba adj hozzá egy új "job"-ot:
+       kimásolunk egy pár sort majd alámásoljuk és a végeredmény a következő sorok lesznek.
+
+  - job_name: "prometheus"
+
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "application_server"
+
+    # metrics_path defaults to '/metrics'
+    # scheme defaults to 'http'.
+
+    static_configs:
+      - targets: ["192.168.56.11:9100"]
+
+Indítsd újra a szolgáltatást:
+
+sudo systemctl stop prometheus
+sudo systemctl start prometheus
+
+Ellenőrzés a Prometheus UI-ban:
+http://192.168.56.10:9090/ -> Status -> Targets -> "UP" állapot = működik
+
+# 8. Node Exporter futtatása rendszer-szolgáltatásként (Linux)
+   Ha csak kézzel indítod a node_exporter-t, leáll, ha bezárod a terminált.
+   Szolgáltatás létrehozása (systemd):
+
+Hozd létre a felhasználót és csoportot az application_server linuxon:
+
+sudo groupadd --system prometheus
+sudo useradd -s /sbin/nologin --system -g prometheus prometheus
+
+Mozgasd a binárist a node_exporter-hez:
+
+sudo mkdir /var/lib/node/
+sudo mv node_exporter /var/lib/node/
+
+Szolgáltatásfájl (/etc/systemd/system/node.service):
+
+sudo nano /etc/systemd/system/node.service
+
+[Unit]
+Description=Prometheus Node Exporter
+Documentation=https://prometheus.io/docs/introduction/overview/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/var/lib/node/node_exporter
+
+SyslogIdentifier=prometheus_node_exporter
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+Jogosultságok:
+
+sudo chown -R prometheus:prometheus /var/lib/node/
+sudo chown -R prometheus:prometheus /var/lib/node/*
+sudo chmod 775 /var/lib/node/
+sudo chmod 775 /var/lib/node/*
+
+Indítás:
+
+sudo systemctl daemon-reload
+sudo systemctl start node
+sudo systemctl enable node
+sudo systemctl status node
+
+  így már nem kell a ./node_exporter parancsot beírni, hogy a szolgáltatás fusson helyette most már a háttérben fut.
+
+# 9. Prometheus adatmodellje
+   Idősor alapú modell (time series):
+     Minden adat: metrika + időbélyeg + opcionális címkék (labels)
+   Formátum:
+     metric_name{label1="value1", label2="value2"}
+     pl.: auth_api_hit{count="1", time_taken="800"}
+
+# 10. Prometheus adattípusok PromQL-ben
+    1. Scalar – egyetlen szám vagy szöveg
+      Pl.: 200 vagy "200" (idézőjelben string!)
+      Fontos: ha stringként tároltad, floatként nem találod meg!
+    2. Instant Vector
+      Egy adott időpillanatra vonatkozó egy érték egy idősorban.
+      Lekérdezés: metric_name{label="value"}
+    3. Range Vector
+      Több időpont értékei egy idősorból.
+      Szintaxis: metric_name{...}[5m] -> utolsó 5 perc adatai.
+      Időtartam egységek:
+        ms = millisec, s = másodperc, m = perc, h = óra, d = nap, w = hét, y = év
+        Nincs hónap (month) támogatás
+
+Lekérdezési gyakoriság:
+Alapértelmezett scrape_interval: 15 másodperc -> 5 perces range = 20 érték
+
+Latogasunk el ide -> http://192.168.56.10:9090/
+es ide is -> http://192.168.56.11:9100/ -> masoljuk ki pl node_network_transmit_errs_total
+
+Menjunk vissza a prometheus oldalra es az input mezobe irjukbe
+
+node_network_transmit_errs_total
+node_network_transmit_errs_total[30m]
+node_network_transmit_errs_total[5m]
+node_network_transmit_packets_total
+node_network_transmit_packets_total[30m]
+node_network_transmit_packets_total[5m]
+
+# 11–13. Bináris műveleti operátorok Prometheus-ban
+  Aritmetikai operátorok (+, -, *, /, %, ^)
+  Használhatók:
+    Skalár + skalár → egyszerű érték (pl. 2 + 2 = 4)
+    Skalár + vektor → a skalár minden vektorértékre alkalmazva
+    Vektor + vektor → csak azonos metrikák és label-ek esetén működik!
+  Eredmény: mindig új vektor keletkezik, az eredetik változatlanok.
+
+Példák:
+
+prometheus_sd_updates_total + 6
+scrape_samples_post_metric_relabeling - 10
+
+Logikai összehasonlító operátorok:
+==, !=, >, <, >=, <=
+  Ha skálárokon használod:
+    Igaz = 1, hamis = 0
+  Ha vektoron: csak azok az elemek maradnak meg, amik megfelelnek a feltételnek.
+
+Halmaz operátorok (and, or, unless)
+  Csak instant vektorokra alkalmazhatók.
+  and: metszet (csak közös elemek maradnak)
+  or: unió (összes elem, amely legalább egyikben szerepel)
+  unless: kivonás (bal oldal elemei, amelyek nincsenek a jobb oldalon)
+
+# 14. Szűrés (Selectors) és reguláris kifejezések
+  Metrikák lekérdezésekor használhatsz címkeszűrőket:
+
+metric_name{label1="value", label2!="value", label3=~"regex", label4!~"regex"}
+
+prometheus_http_response_size_bytes_bucket{handler="/static/*filepath"}
+prometheus_http_response_size_bytes_bucket{handler=~"/static/*.*"}
+prometheus_http_response_size_bytes_bucket{handler=~"/static/*.*", le="1000"}
+
+
+, = ÉS kapcsolat
+=~ -> reguláris kifejezés (pl. "/api/.*")
+Adattípusnak egyeznie kell (pl. "1000" nem egyenlő 1000-el)
+
+# 15. Aggregáló operátorok
+  Működés: aggregálják az instant vektor értékeit → kevesebb sorral, összegzett értékekkel térnek vissza.
+  Operátorok:
+    sum, min, max, avg, count
+    topk(n, ...), bottomk(n, ...)
+    group -> csak csoportosít, érték mindig 1
+    count_values, stddev, stdvar
+
+Használat példa:
+
+sum(node_cpu_seconds_total) by (mode)
+topk(3, avg(node_cpu_seconds_total) by (mode))
+
+node_cpu_seconds_total
+sum(node_cpu_seconds_total)
+sum(node_cpu_seconds_total) by (mode)
+sum(node_cpu_seconds_total) without (mode)
+topk(3, sum(node_cpu_seconds_total) without (mode))
+bottomk(3, sum(node_cpu_seconds_total) without (mode))
+group(node_cpu_seconds_total)
+group(node_cpu_seconds_total) by (mode)
+avg(node_cpu_seconds_total) by (mode)
+topk(3, avg(node_cpu_seconds_total) by (mode))
+
+# 16. Offset – Időbeni eltolás
+  Használat: korábbi időpontból származó adatok lekérdezése
+  Szintaxis:
+
+metric_name offset 10m
+avg(metric_name offset 8h) by (label)
+
+prometheus_http_requests_total
+prometheus_http_requests_total offset 10d
+prometheus_http_requests_total offset 10m
+group(prometheus_http_requests_total) by (code)
+avg(prometheus_http_requests_total) by (code)
+avg(prometheus_http_requests_total offset 8h) by (code)
+
+Az offset közvetlenül a metrika neve után áll.
+
+# 17. Függvények – Clamping és ellenőrzés
+ Ellenőrző függvények:
+  absent(metric) -> visszaad 1-et, ha nincs találat
+  absent_over_time(metric[range]) -> hasonló, de időintervallumra
+
+Matematika:
+  abs(), ceil(), floor()
+  clamp(vector, min, max) -> értékek tartományon belülre korlátozása
+  clamp_min() / clamp_max() -> csak min/max korlátozás
+
+node_cpu_seconds_total
+absent(node_cpu_seconds_total{cpu="x09d"})
+absent_over_time(node_cpu_seconds_total{cpu="xrff"}[1h])
+clamp_min(node_cpu_seconds_total, 300)
+clamp_max(node_cpu_seconds_total, 150000)
+clamp(node_cpu_seconds_total, 300, 150000)
+
+# 18–19. Delta és rendezés
+  delta(metric[range]), idelta(...) -> értékváltozás adott időtartamban (pl. CPU hőmérséklet)
+  log2(), log10(), ln() -> logaritmusos lekérdezések
+  sort(), sort_desc() -> növekvő/csökkenő sorrendben
+  timestamp() -> lekért érték időbélyege
+
+sort(clamp(node_cpu_seconds_total, 300, 150000))
+sort_desc(clamp(node_cpu_seconds_total, 300, 150000))
+timestamp(clamp(node_cpu_seconds_total, 300, 150000))
+timestamp(clamp(node_cpu_seconds_total offset 1h, 300, 150000))
+
+# 20. Időalapú aggregálások
+  Range vector típusra alkalmazhatók:
+    avg_over_time(), sum_over_time(), min_over_time(), max_over_time(), count_over_time(), stddev_over_time(), stdvar_over_time()
+
+Példa:
+
+avg_over_time(node_cpu_seconds_total[2h])
+
+node_cpu_seconds_total
+avg(node_cpu_seconds_total)
+avg(node_cpu_seconds_total[2h])
+avg_over_time(node_cpu_seconds_total[2h])
+avg_over_time(node_cpu_seconds_total{cpu="0"}[2h])
+
+# 21–22. Exporterek Mac-re és Windows-ra
+  Mac + Homebrew + Node Exporter
+  Telepítés:
+
+brew install node_exporter
+brew services start node_exporter
+http://localhost:9100/
+common + shift ha nem látod a rejtet fájlokat -> machintos/usr/local/etc/prometheus.yaml -> nyisd meg pl vscode-al
+
+  Konfiguráció fájl: /usr/local/etc/prometheus.yml
+
+- job_name: "node"
+  static_configs:
+    - targets: ["localhost:9100"]
+
+Windows + WMI Exporter
+  Nincs hivatalos Windows exporter -> WMI Exporter használata
+  Letöltés: https://github.com/prometheus-community/windows_exporter/releases
+  Default port: 9182
+  Konfiguráció hozzáadása:
+
+- job_name: "wmi_exporter"
+  static_configs:
+    - targets: ["localhost:9182"]
+
+Ellenőrzés:
+  http://localhost:9182/metrics
+  Prometheus UI -> Status -> Targets -> új target látható

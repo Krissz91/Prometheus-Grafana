@@ -1,0 +1,79 @@
+# 1. Monolitoktól a Mikroszolgáltatásokig – Miért kell Observalibity/Megfigyelhetőség?
+       Monolitikus architektúra: Egyetlen nagy alkalmazásban egyesül minden szolgáltatás és adatbázis.
+         Lassú fejlesztés, nehéz skálázás.
+       Mikroszolgáltatásos architektúra: Alkalmazás komponensekre bontva, külön adatbázisokkal.
+         Gyors, párhuzamos fejlesztés és gyakori kis deploy-ok lehetségesek (CI/CD).
+       CI/CD kihívásai:
+         Gyakoribb hibalehetőség (gyakori release).
+         Több komponens -> nagyobb hiba- és támadási felület.
+       Observability-re szükség van, mert nő a komplexitás és a meghibásodás esélye.
+
+# 2. Mi az a Monitoring?
+       Monitoring: Rendszeres adatgyűjtés és vizualizáció a rendszer állapotáról.
+       Alapkérdések:
+         1. Működik a szolgáltatás?
+         2. Rendeltetésszerűen működik?
+         3. Jól teljesít?
+       Analógia: Autó műszerfala (RPM, hibajelzések).
+       Példa: Weboldal (Save the Koala)
+         HTTP 200 válasz = él.
+         Hibaüzenetek száma < küszöb = megfelelő működés.
+         Válaszidő < 20ms = jó teljesítmény.
+       Telemetry data: Monitoringhoz gyűjtött adatok.
+         MTTD (Mean Time to Detection)
+         MTTR (Mean Time to Resolution)
+
+# 3. Monitoring Módszerek – Mit érdemes mérni?
+     Rendszer 3 rétege:
+       UI réteg (web, mobil)
+       Szerviz réteg (mikroszolgáltatások)
+       Infrastruktúra réteg (CPU, memória stb.)
+     Monitoring modellek:
+       RED (Rate, Errors, Duration) – főként a szerviz rétegre:
+       Rate: Kérések száma/s
+       Errors: Hibák száma
+       Duration: Válaszidő
+     USE (Utilization, Saturation, Errors) – infrastruktúrára:
+       Utilization: CPU, memória használat
+       Saturation: Telített erőforrások (pl. hálózati torlódás)
+       Errors: Pl. disk write error
+     4 Golden Signals – Google-féle javaslat:
+       RED + Saturation = Latency, Traffic, Errors, Saturation
+     Core Web Vitals – UI rétegre (SEO szempontból fontos!):
+       Largest Contentful Paint
+       First Input Delay
+       Cumulative Layout Shift
+
+# 4. Mi az az Observability?
+     Monitoring nem egyenlő Observability, de a monitoring része az observability-nek.
+     Monitoring = előre tudnod kell, mit akarsz mérni.
+     Observability = ismeretlen problémák feltárása is lehetséges.
+     Tool sprawling: Túl sok, nem összehangolt eszköz -> rossz átláthatóság.
+     Analógia: Autó műszerfal (monitoring) vs. szerelő diagnosztikai eszköze (observability).
+     Összehasonlítás:
+
+	Monitoring			Observability
+	Előre tudod, mit figyelsz	Feltárja az ismeretlen hibákat is
+	Mikor és hol történt a hiba?	Miért történt a hiba?
+	Monolitikus rendszerekhez	Mikroszolgáltatás-alapú rendszerekhez
+
+# 5. Telemetry Adattípusok – MELT modell
+     M = Metrics: Aggregált érték (pl. 100 csipsz/perc)
+     E = Events: Esemény időbélyeggel (pl. vásárlás 15:20-kor)
+     L = Logs: Részletes információ (pl. vásárlás helye, fizetés típusa stb.)
+     T = Traces: Mikroszolgáltatások közötti lekérések követése (pl. fizetési folyamatban hova ment a kérés)
+
+# 6. Metrika Gyűjtési Módszerek – Push vs. Scrape
+     Push (küldés):
+       Az alkalmazás küldi az adatokat a gyűjtőbe (pl. Graphite).
+       Példa: app -> StatsD (aggregálás) -> Graphite.
+       Előny: egyszerű küldés, kevésbé aktív központi rendszer.
+     Scrape (lekérdezés):
+       A Prometheus lekérdezi az alkalmazás által biztosított API-n keresztül a metrikákat.
+       Példa: Prometheus -> lekérdezi a Python alkalmazást.
+       Előny: pull-alapú -> jobban kontrollálható.
+     Választás szempontjai:
+       Rendszerek jellege: custom app vagy sima OS/db?
+       Skálázhatóság: új típusú rendszerek hozzáadása egyszerűen?
+       Komplexitás: elosztott rendszerek vagy egyetlen kis szolgáltatás?
+       Nincs univerzális válasz – az adott rendszerhez kell igazítani.
