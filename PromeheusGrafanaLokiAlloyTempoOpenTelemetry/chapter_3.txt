@@ -1,0 +1,73 @@
+[Grafana telepítése és konfigurálása]
+
+# 1. Cloud vagy On-Premises?
+     Grafana Cloud:
+       Előny: nem kell telepítés, automatikus frissítés, skálázható, ingyenes kezdőcsomag.
+       Hátrány: költség, vendor lock-in, adatvédelem (GDPR).
+
+     Saját telepítés (On-Premises):
+       Előny: teljes kontroll, adatvédelem, testreszabás, költséghatékony.
+       Hátrány: karbantartási teher, frissítések, skálázás saját felelősség.
+
+# 2. Telepítés Ubuntu-ra
+
+sudo apt update
+sudo apt upgrade
+sudo apt-get install -y adduser libfontconfig1 musl
+wget https://dl.grafana.com/enterprise/release/grafana-enterprise_12.0.1_amd64.deb
+sudo dpkg -i grafana-enterprise_12.0.1_amd64.deb
+sudo systemctl daemon-reload
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+sudo systemctl status grafana-server
+
+Elérés: http://localhost:3000 vagy http://<ip-address>:3000
+Default login: admin / admin
+
+# 3. Telepítés Amazon Linux / Red Hat alapú rendszerekre
+
+sudo yum update
+sudo yum install -y https://dl.grafana.com/oss/release/grafana-12.0.1-1.x86_64.rpm
+sudo systemctl enable grafana-server
+sudo systemctl start grafana-server
+sudo systemctl status grafana-server
+
+Elérés: http://localhost:3000 vagy http://<ip-address>:3000
+Default login: admin / admin
+
+# 4. Telepítés Windows-ra
+  Letöltés: https://grafana.com/grafana/download
+  Installer futtatása, majd elérés: http://localhost:3000
+  Konfiguráció fájl: C:\Program Files\GrafanaLabs\grafana\conf\defaults.ini
+
+# 5. Telepítés Mac-re (Homebrew)
+
+brew install grafana
+cd /usr/local/etc/grafana
+cp grafana.ini custom.ini
+
+Elérés: http://localhost:3000
+Futtatás: brew services start grafana
+
+# 6. Konfigurációs fájl szerkesztés (grafana.ini)
+  Default: /etc/grafana/grafana.ini (vagy custom.ini)
+  Tipp:
+    Kommentek ; jellel — ezt törölni kell módosításkor!
+    SQL backend: SQLite, MySQL vagy PostgreSQL
+    Restart kell a módosítások érvényesítéséhez:
+
+sudo systemctl restart grafana-server
+
+# 7. Grafana Stack (Grafana + Prometheus + ShoeHub) Dockerrel
+  GitHub repo: https://github.com/aussiearef/ShoeHubV2
+  Telepítés:
+
+git clone https://github.com/aussiearef/ShoeHubV2.git
+cd ShoeHubV2/Docker/
+sudo docker compose -f grafana-prometheus.yml up -d
+
+Elérhető szolgáltatások:
+  Prometheus → localhost:9090
+  Grafana → localhost:3000
+  Loki, Tempo → log és trace támogatás
+  ShoeHub (metrikák generálása)

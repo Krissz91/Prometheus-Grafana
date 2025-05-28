@@ -1,3 +1,5 @@
+[A megfigyelhetőség alapjai]
+
 # 1. Monolitoktól a Mikroszolgáltatásokig – Miért kell Observalibity/Megfigyelhetőség?
        Monolitikus architektúra: Egyetlen nagy alkalmazásban egyesül minden szolgáltatás és adatbázis.
          Lassú fejlesztés, nehéz skálázás.

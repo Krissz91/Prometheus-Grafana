@@ -1,0 +1,196 @@
+[Grafana használata]
+
+# 1. Dashboard tervezési minták
+       Web app: hibaarány, oldalbetöltés, LCP, FID
+       Backend: API hívások, CPU/memória, log
+       Infrastruktúra: hostok, CPU, RAM, disk
+       Synthetics: health check, Redis, MySQL
+       Üzleti: eladás, refund, régiók, top fizetési módok
+
+# 2. ShoeHub metrikák
+       Sales típusok: shoehub_sales_Boots, shoehub_sales_HighHeels, shoehub_sales_Loafers
+       Fizetési módok: shoehub_payments{PaymentMethod="Card", CountryCode="US"}
+       Példa PromQL:
+
+Előszor is a meglevő prometheus és grafanat állítsuk le mert szükségünk van a 9090 es 3000 porokra vagy csináljunk egy új gépet.
+Miután letöltöted a Docker Enginet pl:
+
+# Add Docker's official GPG key:
+sudo apt-get update
+sudo apt-get install ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add the repository to Apt sources:
+echo \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+  $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | \
+  sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+sudo apt-get update
+
+sudo apt-get install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+sudo docker run hello-world
+
+mentsük le a következő github repot és indítsuk el:
+
+git clone https://github.com/aussiearef/ShoeHubV2.git
+cd ShoeHubV2/Docker/
+sudo docker compose -f grafana-prometheus.yml up -d
+
+Ha valami nem jó akkor a következő fájlokat írd át:
+
+# grafana-prometheus.yml
+
+version: "3.8"
+
+services: # This is the main 'services' block
+  prometheus:
+    image: prom/prometheus
+    networks:
+      - monitoring
+    ports:
+      - 9090:9090
+    volumes:
+      - ../prometheus.yml:/etc/prometheus/prometheus.yml # Corrected path
+
+  grafana:
+    image: grafana/grafana-oss
+    networks:
+      - monitoring
+    ports:
+      - 3000:3000
+    environment:
+      GF_DATASOURCE: prometheus
+
+  loki:
+    image: grafana/loki:latest
+    networks:
+      - monitoring
+    ports:
+      - 3100:3100
+
+  shoehub: # <--- THIS MUST BE INDENTED UNDER 'services:'
+    build: ../ShoeHubV2
+    networks:
+      - monitoring
+    ports:
+      - 5000:8080 # Map host port 5000 to container port 8080
+
+networks:
+  monitoring:
+    external: false
+
+# prometheus.yml
+
+scrape_configs:
+  - job_name: 'shoehub'
+    static_configs:
+      - targets: ['shoehub:8080'] # ***CHANGE THIS: Use port 8080 for the target***
+
+pár parancs:
+shoehub_sales_Boots
+rate(shoehub_sales_Boots[1m])
+rate(microsoft_aspnetcore_hosting_http_server_request_duration_sum[1m])
+rate(shoehub_sales_Boots[1m])
+rate(shoehub_payments{CountryCode="US", PaymentMethod="Paypal"}[5m])
+
+# 3. Grafana adatforrás: Prometheus
+       Beállítás: Data Sources -> Add -> Prometheus
+       URL: http://localhost:9090 vagy http://<ip-address>:9090
+       Hitelesítés: alapértelmezetten nem szükséges
+
+# 4–5. Dashboard és panel létrehozása
+         Idősoros panel (Time series)
+         Query + rate() függvény
+         Több lekérdezés / alias / aggregáció:
+
+rate(microsoft_aspnetcore_hosting_http_server_request_duration_sum[1m])
+rate(microsoft_aspnetcore_hosting_http_server_request_duration_sum[5m])
+rate(shoehub_sales_Boots[1m]) + rate(shoehub_sales_Loafers[1m])
+
+# 6. Több lekérdezés és összegzés
+       Több metric összeadása külön query-ben vagy új lekérdezéssel
+       Aliasok: panel szebb, értelmesebb
+
+rate(shoehub_sales_Boots[1m])
+rate(shoehub_sales_HighHeels[1m])
+rate(shoehub_sales_Loafers[1m])
+rate(shoehub_sales_Boots[1m]) + rate(shoehub_sales_HighHeels[1m]) + rate(shoehub_sales_Loafers[1m])
+
+rate(shoehub_sales{ShoeType="Boots"}[5m])
+rate(shoehub_sales{ShoeType="HighHeels"}[5m])
+rate(shoehub_sales{ShoeType="Loafers"}[5m])
+rate(shoehub_sales{ShoeType="Boots"}[5m]) + rate(shoehub_sales{ShoeType="HighHeels"}[5m]) + rate(shoehub_sales{ShoeType="Loafers"}[5m])
+
+# 7. Gyakorlat: USA fizetési módok
+       Három query: Card, Cash, Paypal
+       Teljes napi összeg: sum(...)
+       Panel testreszabása, színek, layout
+
+# 8. Data Transformation
+       Nincs szükség új PromQL-re
+       Transzformáció: Reduce, Merge, Calculation
+       Összegzés -> Total sales vizualizálva
+
+# 9. Pie chart
+       Arányok összehasonlítása (pl. országonkénti kártyás fizetés)
+       Display: value, name, színek, tooltip
+
+rate(shoehub_payments{CountryCode="AU", PaymentMethod="Card"}[5m])
+rate(shoehub_payments{CountryCode="IN", PaymentMethod="Card"}[5m])
+rate(shoehub_payments{CountryCode="US", PaymentMethod="Card"}[5m])
+
+# 10. Időbeli összehasonlítás (offset)
+
+rate(shoehub_sales{ShoeType="Loafers"}[10m])
+rate(shoehub_sales{ShoeType="Loafers"}[10m] offset 5m)
+rate(shoehub_sales{ShoeType="Loafers"}[10m])
+rate(shoehub_sales{ShoeType="Loafers"}[$__range])
+rate(shoehub_sales{ShoeType="Loafers"}[$__range] offset 5m)
+
+# 11–12. Threshold használat
+           Cél: vizuális riasztás ha pl. Paypal < 5%
+           Grafikonban vonal + színezett sáv
+           Percent mód -> threshold = 5
+
+sum(shoehub_payments{CountryCode="US",PaymentMethod="Card"}) / sum(shoehub_payments{CountryCode="US"})
+sum(shoehub_payments{CountryCode="US",PaymentMethod="Card"}) / sum(shoehub_payments{CountryCode="US"}) * 100
+sum(shoehub_payments{CountryCode="US",PaymentMethod="Cash"}) / sum(shoehub_payments{CountryCode="US"}) * 100
+sum(shoehub_payments{CountryCode="US",PaymentMethod="Paypal"}) / sum(shoehub_payments{CountryCode="US"}) * 100
+
+# 13–15. Dinamikus dashboardok változókkal (variables)
+           $country, $paymentMethod -> lekérdezésbe helyettesíthető
+           label_values() lekérdezés változóhoz
+           Dashboard panelek ismétlése (repeat)
+
+Prometheus-ban:	shoehub_payments{PaymentMethod="Card"}
+Grafana-ban:	label_values(shoehub_payments{PaymentMethod="Card"}, CountryCode)
+
+sum(shoehub_payments{CountryCode="$country",PaymentMethod="Card"}) / sum(shoehub_payments{CountryCode="$country"}) * 100
+sum(shoehub_payments{CountryCode="$country",PaymentMethod="Cash"}) / sum(shoehub_payments{CountryCode="$country"}) * 100
+sum(shoehub_payments{CountryCode="$country",PaymentMethod="Paypal"}) / sum(shoehub_payments{CountryCode="$country"}) * 100
+
+paymentmethod variable = label_values(shoehub_payments{CountryCode="US"}, PaymentMethod)
+
+shoehub_payments{PaymentMethod="$paymentMethod"}
+
+Legend -> custom -> {{CountryCode}}
+Panel Option -> Title -> Payment Amount by Method of $paymentMethod
+
+# 16. Logaritmikus skálázás
+        Ha értékek eltérnek -> log10 segíthet vizualizációban
+        Beállítható a panel axis részében
+
+Pl: Matrics browser-be beirjuk 2 a függőleges résznél a 2-nél helyezkedik el és vízszintesen húzza a vonalat.
+Ha még egy Matrics browsert adunk meg pl 500-as értékkel akkor az 500 az 500-ason helyezkedik el mig a 2-es a 0-n.
+Megoldas -> Axis -> Scale = Logarithmic, Log base = 10
+
+# 17. Gauge és Bar Gauge panelek
+        Értékek vizuális kijelzése (pl. max/min eladások)
+        Egyszerű beállítás és látványos megjelenés
+
+shoehub_payments{CountryCode="US", PaymentMethod="Card"}
+shoehub_payments{CountryCode="US"}
+Legend -> Custom -> {{PaymentMethod}}
