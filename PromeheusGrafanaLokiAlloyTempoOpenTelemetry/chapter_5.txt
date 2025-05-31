@@ -1,0 +1,56 @@
+[Riasztások, értesítések és jegyzetek Grafanában]
+
+# 1. Riasztások felépítése Grafanában
+     Riasztási szabály (Alert Rule) → ha megsértődik, akkor riasztás (Alert) keletkezik.
+     A riasztást a Notification Policy fogadja, amely eldönti, kell-e értesítést küldeni.
+     Értesítés csak akkor megy, ha van megfelelő Contact Point (pl. email, Slack).
+     Riasztási lánc:
+       Alert Rule -> Alert -> Notification Policy -> Contact Point
+
+# 2. Riasztási szabály létrehozása
+     Menü: Alerting → Alert Rules → New Alert Rule
+     Válassz adatforrást (pl. Prometheus) → írj PromQL lekérdezést.
+     Két fontos lépés:
+       1. Reduce Expression – pl. last, avg, sum → 1 darab értéket állít elő
+       2. Threshold Expression – szabály pl.: „< 400”
+     Beállítható:
+       Értékelési intervallum (pl. 20s)
+       Késleltetett riasztás (pl. 1 perc megsértés után)
+       Leírás, Runbook link
+       Címkék (pl. team: tech) → később a notification policy szűr rá
+     Állapotok:
+       Zöld szív = nincs probléma
+       Narancs = értékelés alatt
+       Piros = riasztás aktív
+
+# 3. Értesítések beállítása
+     Contact Point:
+       Típus: email, Slack, Teams, Discord, Telegram, Webhook stb.
+       Példa: alert@mycompany.com
+     Notification Policy:
+       Ne a default-ot módosítsd → hozz létre új, beágyazott szabályt.
+       Szűrés: címkék alapján (pl. team: tech, __name__ = payments)
+       Contact Point hozzárendelés
+     Dummy SMTP szerver teszthez: Mailtrap használata
+
+# 4. Slack integráció
+     Slack -> Beállítások -> Apps -> Webhook keresése -> Incoming Webhooks telepítése
+     Válaszd ki a csatornát, majd Webhook URL másolása
+     Grafana → Contact Point → Slack Integration → Webhook URL beállítása
+     Értesítési szabályhoz hozzárendelni
+
+# 5. Riasztások némítása (Silencing)
+     Menü: Alerting → Silences
+     Időintervallum és címkék alapján némítható
+     Csak az értesítést némítja, a riasztás attól még létrejön
+     Pl.: team: tech, __name__=shoehub_payments, időtartam: 2 óra
+
+# 6. Jegyzetek (Annotations)
+     Grafikonon események vizuális jelölése
+     3 mód:
+       1. Egyetlen időpont: jobb klikk + Add annotation
+       2. Időintervallum: drag + leírás + mentés
+       3. Automatikus: Grafana saját DB-be menti (-- Grafana -- datasource)
+     Használat:
+       Hibás deployok jelzése (pl. "rossz release")
+       Kampányidőszak vizsgálata

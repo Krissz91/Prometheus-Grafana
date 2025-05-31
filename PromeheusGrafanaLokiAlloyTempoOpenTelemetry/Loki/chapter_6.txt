@@ -1,0 +1,300 @@
+[Grafana Loki (Log-elemzés)]
+
+# 1. Mi az a Grafana Loki?
+     Nyílt forráskódú log aggregációs rendszer, szorosan integrálva Grafanával.
+     Prometheus-szerű lekérdezések -> gyors log keresés.
+     Nem rendelkezik saját UI-val -> Grafanán keresztül történik a megjelenítés.
+     Komponensek:
+       Loki – log tároló és lekérdező
+       Promtail – log gyűjtő agent
+       (vagy Grafana Alloy – komplex jelgyűjtő rendszer)
+
+# 2. Loki használati lehetőségek
+     Grafana Cloud (SaaS)
+     Saját szerveren: letöltés GitHub-ról vagy Docker Compose-szal
+
+# 3. Loki + Promtail telepítése (Ubuntu CLI)
+
+[Loki szerver]
+
+sudo apt update
+sudo apt upgrade
+cd /tmp
+sudo wget https://github.com/grafana/loki/releases/download/v2.9.0/loki-linux-amd64.zip
+vagy
+sudo wget https://github.com/grafana/loki/releases/download/v2.9.0/loki-linux-amd64.tar.gz
+sudo apt install unzip # Ha nincs telepítve
+unzip loki-linux-amd64.zip
+vagy
+tar -xzf loki-linux-amd64.tar.gz
+sudo mv loki-linux-amd64 /usr/local/bin/loki
+sudo groupadd --system loki
+sudo useradd -s /sbin/nologin --system -g loki loki
+sudo mkdir -p /var/lib/loki
+sudo mkdir -p /var/lib/loki/boltdb-shipper-active
+sudo mkdir -p /var/lib/loki/boltdb-shipper-cache
+sudo mkdir -p /var/lib/loki/chunks
+sudo chown -R loki:loki /var/lib/loki
+sudo chmod -R 755 /var/lib/loki
+sudo mkdir /etc/loki
+sudo nano /etc/loki/config.yaml
+
+auth_enabled: false
+
+server:
+  http_listen_port: 3100
+  grpc_listen_port: 9095
+
+common:
+  path_prefix: /var/lib/loki
+  replication_factor: 1
+  ring:
+    instance_addr: 127.0.0.1
+    kvstore:
+      store: inmemory
+
+schema_config:
+  configs:
+    - from: 2020-10-27
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: /var/lib/loki/boltdb-shipper-active
+    cache_location: /var/lib/loki/boltdb-shipper-cache
+    resync_interval: 5s
+  filesystem:
+    directory: /var/lib/loki/chunks
+
+limits_config:
+  enforce_metric_name: false
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+
+sudo nano /etc/systemd/system/loki.service
+
+[Unit]
+Description=Loki Log Aggregator
+After=network.target
+
+[Service]
+Type=simple
+User=loki
+Group=loki
+ExecStart=/usr/local/bin/loki -config.file=/etc/loki/config.yaml
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+
+sudo systemctl daemon-reload
+sudo systemctl start loki.service
+sudo systemctl enable loki.service
+sudo systemctl status loki.service
+linux cli-ben: curl http://192.168.56.10:3100/ready
+vagy
+böngészőben: http://192.168.56.10:3100/ready
+
+[web szerver]
+
+sudo apt update
+sudo apt install promtail								# ez nem működik, látogasunk el ide https://github.com/grafana/loki/releases
+											# és válaszd ki pl a promtail-linux-amd64.zip-et. Csak jobb klikk rá és Copy Link Address
+
+wget https://github.com/grafana/loki/releases/download/v3.5.0/promtail-linux-amd64.zip
+unzip promtail-linux-amd64.zip								# ha nincs unzip a gépen akkor értelemszerűen sudo apt install unzip)
+sudo mv promtail-linux-amd64 /usr/local/bin/promtail
+sudo chmod +x /usr/local/bin/promtail
+cd /etc/
+ls
+sudo mkdir promtail
+cd promtail
+sudo nano config.yml
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://192.168.56.10:3100/loki/api/v1/push	# loki szerver privát ip-címe
+
+scrape_configs:
+  - job_name: system
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: varlogs
+          __path__: /var/log/*log
+
+  - job_name: shoehub
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: shoehub
+          app: shoehub
+          __path__: /var/log/shoehub/log*
+
+  - job_name: python_app_logs
+    static_configs:
+      - targets:
+          - localhost				# A logfájl a Promtailt futtató webszerveren van
+        labels:
+          job: python_app_logs
+          app: mypythonapp			# Ez egy extra címke a Grafana Explore-ban való szűréshez
+          __path__: /var/log/loki_udemy.log	# A Python szkript által írt logfájl útvonala
+
+cd /etc/systemd/system
+sudo nano promtail.service
+
+[Unit]
+Description=Loki Promtail
+After=network.target
+
+[Service]
+Type=simple
+User=promtail
+Group=promtail
+ExecStart=/usr/local/bin/promtail -config.file=/etc/promtail/config.yml
+Restart=always
+
+[Install]
+WantedBy=default.target
+
+sudo mkdir -p /var/lib/promtail
+sudo groupadd --system promtail || true
+sudo useradd -s /sbin/nologin --system -g promtail promtail || true
+sudo chown promtail:promtail /var/lib/promtail
+sudo chmod 755 /var/lib/promtail
+nano /home/user/log.py
+
+#!/usr/bin/python3
+
+import logging
+from datetime import datetime
+import time
+import random
+
+# Configure basic logging to write logs to a file
+log_file_path = '/var/log/loki_udemy.log'
+logging.basicConfig(filename=log_file_path, level=logging.INFO, format='%(asctime)s level=%(levelname)s app=myapp component=%(component)s %(message)s')
+
+def generate_log_entries():
+    components = ["database", "backend"]
+
+    for _ in range(10):
+        log_level = logging.INFO if _ % 3 == 0 else logging.WARNING if _ % 3 == 1 else logging.ERROR
+        component = random.choice(components)
+
+        print(f"Generating log of type {logging.getLevelName(log_level)} with component {component}")
+
+        if log_level == logging.INFO:
+            log_message = "Information: Application running normally"
+        elif log_level == logging.WARNING:
+            log_message = "Warning: Resource usage high"
+        else:
+            log_message = "Critical error: Database connection lost"
+
+        # Use the extra parameter to dynamically set the 'component' value
+        logging.log(log_level, log_message, extra={"component": component})
+        time.sleep(1)  # Sleep for 1 second between entries
+
+if __name__ == "__main__":
+    generate_log_entries()
+    logging.shutdown()
+
+sudo chmod 700 log.py
+sudo ./log.py
+sudo chown promtail:promtail /var/log/loki_udemy.log	# ez csak akkor működik ha meg van a python fájl és már egyszer futtatuk
+sudo chmod 644 /var/log/loki_udemy.log
+
+sudo systemctl daemon-reload
+sudo systemctl start promtail.service
+sudo systemctl enable promtail.service
+sudo systemctl status promtail.service
+
+Látogasunk el a grafana oldlaunkra: http://192.168.56.10:3000
+Bal oldalt a Connections -> Data sources -> Add new data sorurce -> Válaszd ki a Loki-t -> 
+URL = http://192.168.56.10:3100 -> save & test
+Bal oldalt kattints az Explore-re -> állítsd át Loki-ra -> select label = filename -> select value = /var/log/loki_udemy.log -> Run query
+Láthatóak lesznek azok az adatok mikor futtatjuk a python fájlt. Ha még egyszer futatjuk a python fájlt és vissza megyünk a grafana-ba és
+run query-re kattintunk akkor megjelenek az újabb log adatok
+
+# 4. Promtail logok továbbítása
+     Logforrások (pl. /var/log/shoehub/log*)
+     Címkék: job, app, __path__
+     Grafana -> Explore -> Adatforrás: Loki
+
+# 5. Statikus címkék
+     Konfigban megadható fix címkék:
+
+etc/promtail/config.yml
+
+__path_:........
+team: DevOps
+env: Prod
+
+Label filters-nél + jelre kattints -> select label = env -> select value = Prod
+
+hinit: add logfmt parser -> Expression -> fiel_name = component -> text to find = database -> Run query
+
+# 6. Dinamikus címkék – pipeline_stages
+Konfig példa:
+
+etc/promtail/config.yml
+
+pipeline_stages:
+  - logfmt:
+      mapping:
+        component:
+  - labels:
+      component:
+
+Automatikusan felismeri a component= típusú kulcsszavakat (pl. backend, database)
+
+Grafana http://192.168.56.10:3000/ -> bal oldalt Explore -> válaszd ki a loki-t ->
+labels filters: select label = filename -> select value = /var/log/loki_udemy.log ->
+katints a + jelre -> select label = component -> select value = backend -> Run query
+
+# 7. Loki dashboard vizualizáció
+     Logs panel: listázza sorokat
+     Idősoros/bar chart:
+       Kell rate() vagy count_over_time() funkció
+       Pl.:
+
+rate({level="ERROR", component="database"} != `` [1m])
+
+rate({level="ERROR", component="database"} |= `` [1h])
+rate({component="backend", level="ERROR"} |= `` [1h])
+
+rate({component="backend", level="ERROR"} |= `` [1h])
+rate({component="database", level="ERROR"} |= `` [1h])
+
+# 8. Loki telepítése Docker Compose segítségével
+
+mkdir loki
+cd loki
+wget https://raw.githubusercontent.com/grafana/loki/v3.4.1/production/docker-compose.yaml -O docker-compose.yaml
+vagy
+curl -O https://raw.githubusercontent.com/grafana/loki/v3.4.1/production/docker-compose.yaml
+docker compose -f docker-compose.yaml up -d
+
+Tartalmazza:
+  Loki (3100)
+  Promtail
+  Grafana (3000)
+Lokális logfájlok: /var/log/*.log
+
+http://localhost:3000 vagy http://<ip-address>:3000
+username = admin -> password = admin
+data sources-re megyünk és már benne lesz alapból a Loki
+de adjunk hozzá egy újat -> add new data source -> url = http://localhost:3100 vagy http://<ip-address>:3100 -> save&test
