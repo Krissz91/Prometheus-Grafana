@@ -19,12 +19,15 @@ scrape_configs:
       team: Devops
       env: Prod
       component:
+      level:
   pipeline_stages:
   - logfmt:
       mapping:
         component:
+        level:
   - labels:
       component:
+      level:
 
 - job_name: shoehub
   static_configs:
@@ -35,7 +38,7 @@ scrape_configs:
       app: shoehub
       __path__: /var/log/shoehub/log*
 
-- job_name: python_app_logs
+- job_name: python_app_logs # Új job név
   static_configs:
   - targets:
       - localhost
