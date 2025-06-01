@@ -1,0 +1,452 @@
+[Grafana Alloy, OpenTelemetry és log/metrika/trace gyűjtés]
+
+# 1. Bevezetés az OpenTelemetry-be (OTel)
+       OpenTelemetry (OTel) = nyílt forráskódú, vendor-semleges megfigyelhetőségi keretrendszer.
+       Nem backend (nem tárol), hanem:
+         adatok generálása (log, metrika, trace)
+         gyűjtés és továbbítás más eszközökbe (pl. Prometheus, Loki, Tempo).
+       Fejlesztői oldal:
+         SDK használat: Python, Go, Java, .NET stb.
+         Kódba írt mérőszámok, trace-ek.
+       DevOps oldal:
+         Adatok begyűjtése kódmódosítás nélkül (pl. Promtail, Alloy).
+       Használata szabadságot ad a vendor lock-in elkerülésére.
+
+# 2. OpenTelemetry architektúra
+       Mikroszolgáltatásokból származó metrikák, logok és trace-ek -> OTel SDK vagy Auto-instrumentation.
+       Exporter továbbítja az adatokat.
+       Collector (pl. Alloy) előfeldolgozza, szűri, csoportosítja.
+       Backend rendszer: Prometheus, Loki, Tempo, New Relic, stb.
+
+
+[Microservice] -> [OTel SDK vagy Auto-instrument] -> [Exporter] -> [OTel Collector (Alloy)] -> [Backend: Prometheus/Loki/Tempo]
+
+# 3. Prometheus Remote Write és OTel
+       Az OTel egy push-alapú rendszer -> először a backendet kell beállítani.
+       A Prometheus Remote Write lehetővé teszi, hogy más rendszerekbe küldjük a metrikákat.
+       Endpoint: http://<prometheus>:9090/api/v1/write
+       Az OTel Collector (pl. Alloy) Prometheus exporterrel küldi ide az adatokat.
+       Hitelesítés is megadható (pl. Basic Auth).
+
+# 4. Mi az a Grafana Alloy?
+       Grafana Alloy = a Grafana által karbantartott, OpenTelemetry-alapú, minden az egyben adatgyűjtő.
+       Kezeli: metrikák, logok, trace-ek, profilok.
+       Bemenetek: Prometheus, OTel, Linux, Docker, AWS, stb.
+       Kimenetek: Prometheus Remote Write, Loki (log), Tempo (trace).
+       Skálázható, támogatja a clusteres működést is.
+
+# 5. Grafana Alloy telepítése Mac-en
+
+[Mac]
+brew --version
+brew tap grafana/grafana
+brew install grafana/grafana/alloy
+brew services start alloy
+ls /usr/local/etc/alloy
+nano /usr/local/etc/alloy/config.alloy
+
+# 6. Grafana Alloy konfigurálása – adatútvonalak
+       Receivers: adat fogadása (pl. otelcol.receiver.otlp)
+       Processors: adatok csoportosítása, aggregálása (otelcol.processor.batch)
+       Exporters: adatok továbbítása (otelcol.exporter.prometheus, loki.write, stb.)
+
+Példa konfigok:
+
+sudo nano /etc/config.alloy
+
+logging {
+  level  = "debug"
+  format = "logfmt"
+}
+
+
+otelcol.receiver.otlp "default" {
+  http {}
+  grpc {}
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    traces = [otelcol.processor.batch.default.input]
+    logs = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    traces = [otelcol.exporter.prometheus.default.input]
+    logs = [otelcol.exporter.prometheus.default.input]
+  }
+}
+
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://192.168.56.10:9090/api/v1/write"
+    basic_auth {
+      username = "admin"
+      password = "password"
+    }
+  }
+}
+
+sudo systemctl restart alloy
+böngésző URL: http://192.168.56.10:12345
+
+vagy
+sudo nano /etc/alloy/config.alloy
+
+logging {
+  level  = "debug"
+  format = "logfmt"
+}
+
+otelcol.receiver.otlp "default" {
+  http {}
+  grpc {}
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    traces  = [otelcol.processor.batch.default.input]
+    logs    = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    logs    = [otelcol.exporter.loki.default.input]
+  }
+}
+
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.default.receiver]
+}
+
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://192.168.56.10:9090/api/v1/write"
+    basic_auth {
+      username = "admin"
+      password = "password"
+    }
+  }
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://192.168.56.10:3100/loki/api/v1/push"
+  }
+}
+
+loki.source.file "python_app_logs_file" {
+  targets = [
+    { __path__ = "/var/log/loki_udemy.log", job = "python_app_logs_alloy", app = "mypythonapp_alloy" },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+
+sudo nano /etc/systemd/system/alloy.service
+
+[Unit]
+Description=Grafana Alloy Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/alloy run --server.http.listen-addr=0.0.0.0:12345 /etc/alloy/config.alloy
+WorkingDirectory=/var/lib/alloy
+User=alloy
+Group=alloy
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+
+sudo systemctl daemon-reload
+sudo systemctl restart alloy.service
+sudo systemctl status alloy.service
+sudo ./log.py
+böngésző URL: http://192.168.56.10:12345
+              http://192.168.56.11:12345/metrics
+
+Ha nem működik akkor lehet, hogy a tűzfallal van baj:
+
+  sudo ufw allow 12345/tcp
+  sudo ufw status
+
+Ha a Prometheus -> status -> target oldalon is up állapotban szeretnénk látni a http://192.168.56.10:12345 oldalt:
+
+  sudo nano /etc/prometheus/prometheus.yml
+  
+A scrapre_configs szekció legaljára ird
+
+- job_name: 'alloy_internal_metrics'
+  scrape_interval: 15s
+  static_configs:
+    - targets: ['192.168.56.11:12345']
+
+Küldj reload jelet a Prometheusnak
+
+  sudo systemctl reload prometheus
+
+Ha nem működik a reload, akkor újra kell indítani:
+
+  sudo systemctl restart prometheus
+
+Loki log export is hozzáadható
+Prometheus Remote Write endpoint: http://<prometheus>:9090/api/v1/write
+
+# 7. Metrikák küldése egy mikroszolgáltatásból
+       Az alkalmazás (pl. .NET mikroszerviz) OTel SDK-t használ → otel.order típusú metrikát hoz létre.
+       Küldi az adatokat a 4318-as porton (HTTP/OTLP) vagy 4317-en (gRPC).
+       Az Alloy továbbítja ezeket Prometheus felé → Grafanában vizualizálható.
+
+# 8. Logok küldése Lokiba Alloy segítségével
+       https://grafana.com/docs/alloy/latest/reference/components/loki/
+       Kétféle mód:
+       A) Közvetlenül Loki write + file source:
+
+loki.source.file "tmpfiles" {
+  targets    = [
+    { __path__ = "/var/log/shoehub/*", "app" = "shoehub" },
+  ]
+  forward_to = [loki.write.local.receiver]
+}
+
+       B) OpenTelemetry receiver-rel:
+
+otelcol.receiver.filelog "default" {
+  include = ["/var/log/shoehub/*"]
+  output {
+    logs = [otelcol.exporter.loki.default.input]
+  }
+}
+
+Teljes:
+
+logging {
+  level  = "debug"
+  format = "logfmt"
+}
+
+
+otelcol.receiver.otlp "default" {
+  http {}
+  grpc {}
+
+  output {
+    metrics = [otelcol.processor.batch.default.input]
+    traces = [otelcol.processor.batch.default.input]
+    logs = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+    traces = [otelcol.exporter.prometheus.default.input]
+    logs = [otelcol.exporter.prometheus.default.input]
+  }
+}
+
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://192.168.56.10:9090/api/v1/write"
+    basic_auth {
+      username = "admin"
+      password = "password"
+    }
+  }
+}
+
+loki.source.file "tmpfiles" {
+  targets    = [
+    {__path__ = "/var/log/shoehub/*", "app" = "shoehub"},
+  ]
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+    endpoint {
+        url = "http://loki:3100/loki/api/v1/push"
+    }
+}
+
+otelcol.receiver.filelog "default" {
+  include = ["/var/log/shoehub/*"]
+  output {
+      logs = [otelcol.exporter.loki.default.input]
+  }
+}
+
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.local.receiver]
+}
+
+Előny: ha már úgyis minden adatot OTel-ben kezelsz (traces, metrikák), érdemes a logokat is úgy küldeni.
+Hátrány: OTel log export Loki felé még „preview” funkció – nem stabil termelésben.
+
+# 9. Alloy telepítése Ubuntu Linuxon scriptből
+       GitHub-ról szkripttel is letölthető (pl. install.sh)
+       Beállítások után:
+         Ellenőrizd a fájlokat: /etc/alloy/config.alloy
+         Állítsd be a jogosultságokat (chown alloy:alloy)
+         Indítsd újra a szolgáltatást:
+
+sudo systemctl restart alloy
+
+Prometheus integrációhoz:
+add hozzá a prometheus.yml végére:
+
+- job_name: 'alloy_internal_metrics'
+  static_configs:
+    - targets: ['192.168.56.11:12345']
+
+Összefoglalás:
+Fogalom				Szerepe
+OpenTelemetry			Szabvány: hogyan gyűjtsünk adatot
+Alloy				Ügynök: hogyan továbbítjuk az adatot
+Exporter			Továbbítja: Prometheus, Loki, Tempo
+Receiver			Fogadja: OTel SDK-ból, logfájlokból
+Prometheus Remote Write		Alloy -> Prometheus
+
+[Linux]
+
+Elöbb állítsuk le a promtail és node-exporter amik eddig gyüjtötték az adatokat mert most már az Alloy fogja
+
+  sudo systemctl stop promtail
+  sudo systemctl stop node
+
+Néhány Debian-alapú felhőalapú virtuális gépen nincs alapértelmezés szerint telepítve a GPG.
+
+  sudo apt install gpg	
+
+Importálja a GPG kulcsot, és adja hozzá a Grafana csomag adattárát.	
+  
+  sudo mkdir -p /etc/apt/keyrings/
+  wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee /etc/apt/sources.list.d/grafana.list
+
+Frissítse a tárhelyeket.
+
+  sudo apt-get update
+  sudo apt-get upgrade
+
+Telepítse az Alloy-t.
+
+  sudo apt-get install alloy
+
+Ellenőrizd, hogy az Alloy bináris telepítve van-e és elérhető-e:
+
+  which alloy
+
+Hozd létre a systemd szolgáltatásfájlt az Alloy számára:
+
+  sudo nano /etc/systemd/system/alloy.service
+
+Írja be a következőket:
+
+[Unit]
+Description=Grafana Alloy Agent
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/alloy run /etc/alloy/config.alloy
+WorkingDirectory=/var/lib/alloy
+User=alloy
+Group=alloy
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target
+
+Erősen ajánlott egy dedikált felhasználó és csoport az Alloy futtatásához biztonsági okokból:
+
+  sudo groupadd --system alloy || true
+  sudo useradd -s /sbin/nologin --system -g alloy alloy || true
+
+Hozd létre az Alloy konfigurációs mappáját és fájlját:
+
+  sudo mkdir -p /etc/alloy
+  sudo nano /etc/alloy/config.alloy
+
+Minimális Alloy konfiguráció példa (log gyűjtés Lokiba):
+
+logging {
+  level  = "info"
+  format = "logfmt"
+}
+
+# Ez a telemetry blokk továbbra is kommentelve marad, ahogy volt
+# telemetry {
+#   http_listen_addr = "0.0.0.0:9090"
+#   instance_id = "appserver"
+# }
+
+loki.source.file "python_app_logs" {
+  targets = [
+    { __path__ = "/var/log/loki_udemy.log", job = "python_app_logs_alloy", app = "mypythonapp_alloy" },
+    # Ha később hozzáadnál más logokat, itt add hozzá:
+    # { __path__ = "/var/log/syslog", job = "syslog_alloy" },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://192.168.56.10:3100/loki/api/v1/push"
+  }
+}
+
+FONTOS!: Az egészet másold be, de a # jellel ellátottakat töröld ki
+
+Állítsd be a jogosultságokat:
+
+  sudo chown -R alloy:alloy /etc/alloy
+  sudo chmod -R 755 /etc/alloy
+  sudo chown -R alloy:alloy /var/log/loki_udemy.log
+  sudo chmod 644 /var/log/loki_udemy.log
+
+Hozd létre a munkakönyvtárat az Alloy számára:
+
+  sudo mkdir -p /var/lib/alloy
+
+Állítsd be a megfelelő jogosultságokat a munkakönyvtárra
+
+  sudo chown alloy:alloy /var/lib/alloy
+  sudo chmod 755 /var/lib/alloy
+
+Töltsd újra a systemd-t és indítsd az Alloy-t:
+
+  sudo systemctl daemon-reload
+  sudo systemctl start alloy.service
+  sudo systemctl enable alloy.service
+
+Választható: A szolgáltatás ellenőrzéséhez futtassa a következő parancsot
+
+  sudo systemctl status alloy.service
+
+Ha valami gond van akkor az Alloy naplófájljainak megtekintéséhez futtassa a következő parancsot:
+
+   sudo journalctl -u alloy.service --no-pager -n 50
+
+Ha nincs már rá szükség akkor az Alloy Linux rendszeren történő eltávolításához futtassa a következő parancsokat
+
+  sudo systemctl stop alloy
+  sudo apt-get remove alloy
+  sudo rm -i /etc/apt/sources.list.d/grafana.list
