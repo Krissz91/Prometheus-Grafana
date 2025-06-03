@@ -1,0 +1,892 @@
+[Grafana Tempo: Nyomkövetés elosztott rendszerekben]
+
+# 1. Bevezetés a tracingbe
+       Trace = Egy kérés (pl. HTTP hívás) teljes útja mikroszolgáltatásokon keresztül.
+       Span = A trace egy részfolyamata (pl. adatbázis lekérdezés, API válasz).
+       Hasznos hibakereséshez, függőségek feltérképezéséhez, és bottleneckek megtalálásához.
+       Példa útvonal: Böngésző -> order -> customer -> payment -> voucher -> shipping
+
+Fontos fogalmak:
+Fogalom		Jelentés
+Trace ID	Egy kérés egyedi azonosítója
+Span ID		Egy művelet azonosítója
+Trace Context	Metaadatok (trace ID, span ID) -> másik mikroservice-nek továbbítjuk
+Sampling	Nem minden trace kerül mentésre, csak kiválasztottak (méretcsökkentés céljából)
+
+# 2. Mi az a Grafana Tempo?
+       Nyílt forráskódú trace backend, része a Grafana ökoszisztémának.
+       Nincs szükség adatbázisra, helyi fájlba vagy felhőbe ír (pl. S3).
+       Fogadja trace-eket:
+         Zipkin, OpenTelemetry, Jaeger stb.
+       Grafana csatlakozik hozzá és megjeleníti a trace-eket.
+       Új lekérdezőnyelve: TraceQL (lásd 8. pont)
+
+# 3. Telepítés macOS-en
+       GitHub: https://github.com/grafana/tempo/releases
+       Fájl: tempo_2.7.2_darwin_amd64.tar.gz
+       Konfiguráció: tempo.yaml
+       Futás:
+
+./tempo -config.file tempo.yaml
+
+       Alapértelmezett portok:
+         3200 -> Grafana csatlakozik ide
+         4318 (HTTP) és 4317 (gRPC) -> trace-ek fogadása OpenTelemetry-n keresztül
+
+Látogas el ide: https://github.com/grafana/tempo/releases
+Töltsd le ezt: tempo_2.7.2_darwin_amd64.tar.gz
+dupla kattintás rá és kicsomagolodik. Lesz benne egy Tempo nevű terminal és azt nyísd meg
+cd ~/Downloads/tempo_2.7.2_darwin_amd64
+nano tempo.yaml
+
+server:
+  http_listen_port: 3200
+
+distributor:
+  receivers: 
+    otlp:
+      protocols:
+        http:
+        grpc:
+
+compactor:
+  compaction:
+    block_retention: 48h                # configure total trace retention here
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: linux-microservices
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://admin:password@prometheus:9090/api/v1/write
+        send_exemplars: true
+
+storage:
+  trace:
+    backend: local                
+    local:
+      path: /var/tempo/traces      # Set to correct path on your computer
+    wal:
+      path: /var/tempo/wal         # Set to correct path on your computer
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+
+./tempo -config.file temp.yaml
+
+# 4. Telepítés Linuxon (Ubuntu) röviden
+
+a. Letöltés:
+
+  curl -Lo tempo.deb https://github.com/grafana/tempo/releases/download/v2.7.2/tempo_2.7.2_linux_amd64.deb
+  sudo dpkg -i tempo.deb
+
+b. Portok nyitása (ha szükséges):
+
+sudo ufw allow 3200/tcp
+sudo ufw allow 4318/tcp
+sudo ufw status
+
+c. Indítás:
+
+sudo systemctl start tempo.service
+sudo systemctl status tempo.service
+
+  Telepítés Linuxon (Ubuntu) részletesen
+
+AWS-ben a security groupban a 22 port ssh mellet csináljunk egy 4318 (OTLP HTTP) és egy 3200 (Tempo query API) portot is
+Ha lokális gépen csinálod (mi esetünkben a prometheus szervere telepítsd) akkor a hely tűzfalat állítsd be:
+
+  sudo ufw allow 4318/tcp
+  sudo ufw allow 3200/tcp
+  sudo ufw status
+  sudo ufw enable		# ha inactive
+
+Látogas el ide: https://github.com/grafana/tempo/releases
+tempo_2.7.2_linux_amd64.deb -> copy link address
+
+  curl -Lo tempo.deb https://github.com/grafana/tempo/releases/download/v2.7.2/tempo_2.7.2_linux_amd64.deb
+  sudo dpkg -i tempo.deb
+  sudo nano /etc/tempo/config.yaml			# Ellenőrízzük, hogy a helyén van és írjuk át
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 9095
+  log_level: info
+
+query_frontend:
+  search:
+    duration_slo: 5s
+    throughput_bytes_slo: 1.073741824e+09
+    metadata_slo:
+        duration_slo: 5s
+        throughput_bytes_slo: 1.073741824e+09
+  trace_by_id:
+    duration_slo: 5s
+
+traces:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: "0.0.0.0:4317"
+        http:
+          endpoint: "0.0.0.0:4318"
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: docker-compose
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://prometheus:9090/api/v1/write
+        send_exemplars: true
+  traces_storage:
+    path: /var/tempo/generator/traces
+
+storage:
+  trace:
+    backend: local
+    wal:
+      path: /var/tempo/wal
+    local:
+      path: /var/tempo/blocks
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics, local-blocks]
+      generate_native_histograms: both
+
+  sudo systemctl start tempo.service			# Elinditjuk
+  sudo systemctl status tempo.service			# Activenak kell lennie
+  sudo journalctl -u tempo.service --no-pager -n 100	# Ha gond van akkor utánanézünk mi a gond
+  sudo systemctl restart tempo.service			# Modositasok utan restart
+
+# 5. Alloy konfigurálása trace-ek továbbítására
+       Alloy nem "tempo" exportert használ, hanem OTLP (HTTP vagy gRPC) exportert.
+       Külön porton kell hallgatnia, pl. 4320, hogy ne ütközzön Tempóval.
+
+Példa konfig:
+
+otelcol.receiver.otlp "default" {
+  http { endpoint="0.0.0.0:4320" }
+  output { traces = [otelcol.processor.batch.default.input] }
+}
+
+otelcol.processor.batch "default" {
+  output { traces = [otelcol.exporter.otlphttp.tempo.input] }
+}
+
+otelcol.exporter.otlphttp "tempo" {
+  client {
+    endpoint = "http://tempo:4318"
+    tls {
+      insecure             = true
+      insecure_skip_verify = true
+    }
+  }
+}
+
+Részletesen:
+
+Menjünk az appserver VM-be és nyissuk meg a config.alloy fájlt
+
+logging {
+  level  = "debug"
+  format = "logfmt"
+}
+
+https://www.udemy.com/course/grafana-prometheus-loki-alloy-tempo/learn/lecture/43441366?start=0#overview
+másold ki a következőt:
+
+otelcol.exporter.otlphttp "tempo" {
+    client {
+        endpoint = "http://tempo:4317" # Ird át 4318-ra
+        tls {
+            insecure             = true
+            insecure_skip_verify = true
+        }
+    }
+}
+
+https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.processor.batch/
+másold ki a következőt:
+
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.otlp.production.input] # erre a sorra nincs szükség
+    logs    = [otelcol.exporter.otlp.production.input] # erre a sorra nincs szükség
+    traces  = [otelcol.exporter.otlp.production.input] # otlp-t írd át otlphttp-re és a production-t írd át tempo-ra
+  }
+}
+
+https://grafana.com/docs/alloy/latest/reference/components/otelcol/otelcol.receiver.otlp/
+A következőt másold ki:
+
+otelcol.receiver.otlp "default" {
+  http {} # ki kell egesziteni endpoint="0.0.0.0:4320"-val
+  grpc {} # erre a sorra nincs szukseg
+
+  output {
+    metrics = [otelcol.processor.batch.default.input] # erre a sorra nincs szükség
+    logs    = [otelcol.processor.batch.default.input] # erre a sorra nincs szükség
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+A végeredmény a következő:
+
+logging {
+  level  = "debug"
+  format = "logfmt"
+}
+
+otelcol.receiver.otlp "default" {
+  http {
+    endpoint="0.0.0.0:4320"
+  }
+
+  output {
+    traces  = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    traces  = [otelcol.exporter.otlphttp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlphttp "tempo" {
+    client {
+        endpoint = "http://tempo:4318"
+        tls {
+            insecure             = true
+            insecure_skip_verify = true
+        }
+    }
+}
+
+# 6. Trace küldése mikroservice-ből Tempo-ba (OpenTelemetry SDK)
+       Python vagy .NET alkalmazásból:
+         OTLPSpanExporter → Alloy-ra (gRPC: 4317, HTTP: 4318 vagy 4320)
+         Minden HTTP kérés generálhat egy span-t
+
+Python példa (FastAPI):
+
+with tracer.start_as_current_span("Connecting to DB") as span:
+    span.set_attribute("db-name", "prod-sql")
+    span.set_status(StatusCode.OK)
+
+Minden hívásnál:
+  Metrika nő: otel_order számláló
+  Span jön létre a trace-ben
+
+Részletesen:
+
+#!/usr/bin/python3
+
+from fastapi import FastAPI, HTTPException
+from opentelemetry import trace
+# from opentelemetry.sdk.metrics.export import ConsoleMetricsExporter # Ezt már nem kell importálni, ha nem használjuk
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+# Új import a metrikákhoz
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchExportSpanProcessor
+# Új import a metrikákhoz
+from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+
+app = FastAPI()
+
+# --- TRACE KONFIGURÁCIÓ ---
+# Az OpenTelemetry Trace Provider beállítása
+trace.set_tracer_provider(TracerProvider(resource=Resource.create({"service.name": "Order Service"})))
+tracer = trace.get_tracer(__name__)
+
+# OTLP Trace Exportőr beállítása
+# Az endpoint most az Appserveren futó Alloy OTLP gRPC receiver-ére mutat (általában 4317)
+# Feltételezve, hogy az Alloy ugyanazon a gépen fut, mint az app, "localhost" használható.
+# Ha más IP-címen fut az Alloy az appserveren belül, akkor azt az IP-t kell ide írni.
+span_exporter = OTLPSpanExporter(endpoint="http://localhost:4317")
+span_processor = BatchExportSpanProcessor(span_exporter)
+trace.get_tracer_provider().add_span_processor(span_processor)
+
+# --- METRIKA KONFIGURÁCIÓ ---
+# Az OpenTelemetry Meter Provider beállítása metrikákhoz
+meter_provider = MeterProvider(resource=Resource.create({"service.name": "Order Service"}))
+meter = meter_provider.get_meter(__name__)
+counter = meter.create_counter(name="otel_order", description="Count of orders")
+
+# Új: OTLP Metrika Exportőr beállítása
+# Ugyancsak az Appserveren futó Alloy OTLP gRPC receiver-ére mutat (általában 4317)
+metric_exporter = OTLPMetricExporter(endpoint="http://localhost:4317")
+# Metrika olvasó, ami periodikusan exportálja a metrikákat
+metric_reader = PeriodicExportingMetricReader(metric_exporter)
+meter_provider.add_metric_reader(metric_reader)
+
+
+@app.get('/')
+async def read_root():
+    # Kezdeményez egy trace-t (span-t) a "Connecting to DB" néven
+    with tracer.start_as_current_span("Connetcting to DB") as span: # Hozzáadtam a `as span` részt a könnyebb kezeléshez
+        try:
+            # Szimulálja az adatbázis kapcsolatot
+            # Attribútumok beállítása a span-en
+            span.set_attribute("db-name", "prod-sql")
+            span.set_attribute("connection-status", "success")
+            span.set_attribute("Query result count", "1")
+            span.set_status(trace.Status.OK) # Sikerre állítja a span státuszát
+        except Exception as e:
+            # Kivételek kezelése
+            span.set_status(trace.Status.ERROR) # Hibára állítja a span státuszát
+            span.record_exception(e) # Rögzíti a kivételt
+            print(e)
+    # Inkementálja az "otel_order" számlálót minden híváskor
+    counter.add(1)
+    return {"message": "OK"}
+
+if __name__ == "__main__":
+    # Instrumentálja a FastAPI alkalmazást, hogy automatikusan generáljon span-eket a HTTP kérésekhez
+    FastAPIInstrumentor.instrument_app(app)
+
+    # A FastAPI alkalmazás futtatása az Uvicorn-nal
+    # host="0.0.0.0" azért van, hogy minden IP címről elérhető legyen a szerveren
+    # port=8000 a HTTP port, amit az alkalmazás figyel
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Ez egy Python-alapú FastAPI alkalmazás, amely:
+# egyetlen HTTP végpontot biztosít (/)
+# OpenTelemetry-vel metrikákat (otel_order) és trace-eket gyűjt
+# OTLP protokollon keresztül trace-et és metrikát küld egy OpenTelemetry collector-nak (ebben az esetben az Appserveren futó Grafana Alloy-nak)
+# cél: megfigyelhető web API szimulálása
+
+# Linuxon Python 3 telepítése (ha még nincs):
+# sudo apt update
+# sudo apt install python3 python3-pip -y
+
+# Szükséges Python csomagok telepítése:
+# pip install fastapi uvicorn opentelemetry-sdk opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi
+# vagy
+# pip3 install fastapi uvicorn opentelemetry-sdk opentelemetry-exporter-otlp opentelemetry-instrumentation-fastapi
+
+# Tedd futtathatóvá a fájlt:
+# chmod +x metric-tracer.py vagy chmod 700 metric-tracer.py
+
+# Futtatás:
+# ./metric-tracer.py
+
+config.alloy
+
+# alloy.service-fájlban megadott /etc/alloy/config.alloy helyen lesz
+# Ez egy egyszerű konfiguráció, ami a korábbi Promtail feladatát látja el, PLUSZ OpenTelemetry adatokat fogad.
+
+# Logging: Beállítja az Alloy logjait
+logging {
+  level  = "debug" # Állítsd debug-ra, hogy lásd az OTLP fogadásról szóló üzeneteket
+  format = "logfmt"
+}
+
+# Otelcol Receiver: Fogadja az OpenTelemetry adatokat (trace-eket, metrikákat, logokat)
+# Ezen az IP-címen és portokon várja az adatokat a metrik-tracer.py-tól
+# Alapértelmezett portok az OTLP-hez: gRPC 4317, HTTP 4318
+otelcol.receiver.otlp "default" {
+  http {} # Engedélyezi az OTLP/HTTP fogadását (ha a python app HTTP-n küldene)
+  grpc {} # Engedélyezi az OTLP/gRPC fogadását (a python app ezt használja)
+
+  output {
+    metrics = [otelcol.processor.batch.default.input] # Metrikákat a batch processzornak
+    traces  = [otelcol.processor.batch.default.input] # Trace-eket a batch processzornak
+    logs    = [otelcol.processor.batch.default.input]  # Logokat a batch processzornak (bár a logokat a loki.source.file kezeli)
+  }
+}
+
+# Otelcol Processor: Batch-eli (kötegeli) az adatokat továbbítás előtt
+# Ez javítja a teljesítményt
+otelcol.processor.batch "default" {
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input] # Metrikákat a Prometheus exporternek
+    traces  = [otelcol.exporter.otlp.tempo.input]         # <--- FONTOS ÚJ RÉSZ: Trace-eket a Tempo exporternek
+    logs    = [loki.write.default.receiver]                # Logokat a Loki írójának (ebből a részből is átmehetnek logok, de a loki.source.file a fő)
+  }
+}
+
+# Otelcol Exporter: Trace-ek küldése a Tempónak
+# Ez a blokk fogja a trace-eket a Prometheus szerveren lévő Tempóhoz küldeni
+otelcol.exporter.otlp "tempo" {
+  client {
+    # A Prometheus szerver IP-címe és a Tempo OTLP gRPC portja (általában 4317)
+    endpoint = "192.168.56.10:4317" # CSERÉLD KI A PROMETHEUS SZERVER IP-CÍMÉRE!
+    # secure = false # Csak akkor kell, ha HTTP-n keresztül küldesz OTLP-t és nem használsz TLS-t (a Python gRPC-t használ, így ez irreleváns)
+  }
+}
+
+# Otelcol Exporter: Metrikák küldése a Prometheusnak (remote_write-on keresztül)
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.default.receiver]
+}
+
+# Prometheus remote_write: Metrikák írása a Prometheusba
+prometheus.remote_write "default" {
+  endpoint {
+    url = "http://192.168.56.10:9090/api/v1/write" # A Prometheus szerver IP-címe és portja
+    basic_auth {
+      username = "admin"
+      password = "password" # CSERÉLD KI A SAJÁT JELSZAVADRA!
+    }
+  }
+}
+
+# Loki client: Létrehoz egy klienst, ami a Lokiba küld adatokat
+loki.write "default" {
+  endpoint {
+    url = "http://192.168.56.10:3100/loki/api/v1/push" # A Loki szerver IP-címe és portja
+  }
+}
+
+# Loki source: Fájlból olvassa a logokat
+loki.source.file "python_app_logs_file" {
+  targets = [
+    { __path__ = "/var/log/loki_udemy.log", job = "python_app_logs_alloy", app = "mypythonapp_alloy" },
+    # Hozzáadhatsz más logfájlokat is, pl. system logok
+    # { __path__ = "/var/log/*log", job = "varlogs_alloy", team = "Devops", env = "Prod" },
+    # { __path__ = "/var/log/syslog", job = "syslog_alloy" },
+  ]
+  forward_to = [loki.write.default.receiver]
+}
+
+http://192.168.56.11:5000 weblapon egy OK felirat lesz akkor rendben van.
+Grafanaba belepve http://192.168.56.10:3000
+Keresuk meg a Connetions fulet -> Add new connection -> keresobe ird be Tempo -> Add new data source -> URL = http<ip-address>:3200 -> save&test
+Explore date -> search
+Masold ki a traceID-t a python fajl futatasa utan majd menj vissza a grafanaba es masold be a TraceQL-be -> Run Query
+
+# 7. Span propagálása (Service Graph működéséhez)
+       Ha egyik mikroservice hívja a másikat → trace context továbbítása szükséges
+       HTTP esetén: trace context → HTTP fejlécekbe kerül
+       Példa fejlécek injektálása:
+
+propagator.Inject(context, request.Headers, (h, k, v) => h.Add(k, v));
+
+       SpanKind.Client és SpanKind.Server → fontos a gráf megrajzolásához
+       Grafana Service Graph csak akkor működik, ha:
+         Trace context át van adva
+         Prometheus gyűjti a kapcsolódó metrikákat
+
+Data sources -> Tempo -> Additional settings -> service graph, data source = prometheus -> save&exit
+
+appsettings.json
+
+{
+  "Logging": {
+    "LogLevel": {
+      "Default": "Debug",
+      "Microsoft.AspNetCore": "Debug"
+    }
+  },
+  "OtelMetricCollector": {
+    "Host": "http://localhost:4318/v1/metrics"
+  },
+  "OtelTraceCollector": {
+    "Host": "http://localhost:4318/v1/traces"
+  },
+  "AllowedHosts": "*"
+}
+
+orderservice program.cs
+
+using System.Diagnostics;
+using System.Diagnostics.Metrics;
+using System.Net.Mime;
+using OpenTelemetry;
+using OpenTelemetry.Context.Propagation;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+
+var builder = WebApplication.CreateBuilder(args);
+var metricCollectorUrl = builder.Configuration["OtelMetricCollector:Host"] ?? "";
+var traceCollectorUrl = builder.Configuration["OtelTraceCollector:Host"] ?? "";
+
+if (builder.Environment.IsProduction())
+{
+    traceCollectorUrl = traceCollectorUrl.Replace("localhost", "alloy"); // set to docker container name of Alloy
+    metricCollectorUrl = metricCollectorUrl.Replace("localhost", "alloy");
+    Console.WriteLine("Alloy address is set to http://alloy:4318/");
+}
+
+const string serviceName = "Order Service";
+const string serviceVersion = "1.0.0";
+var meterName = $"{serviceName}.meter";
+
+builder.Services
+    .AddHttpClient()
+    .AddSingleton(TracerProvider.Default.GetTracer(serviceName))
+    .AddMetrics()
+    .AddOpenTelemetry()
+    .WithMetrics(m =>
+    {
+        m.SetResourceBuilder(ResourceBuilder.CreateDefault()
+                .AddService(serviceName, serviceVersion: serviceVersion))
+            .AddMeter(meterName)
+            .AddOtlpExporter(o =>
+            {
+                o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                o.Endpoint = new Uri(metricCollectorUrl);
+            })
+            .AddConsoleExporter();
+    })
+    .WithTracing(t =>
+    {
+        t.AddSource(serviceName)
+            .SetResourceBuilder(
+                ResourceBuilder.CreateDefault()
+                    .AddService(serviceName, serviceVersion: serviceVersion))
+            .AddAspNetCoreInstrumentation()
+            .AddOtlpExporter(o =>
+            {
+                o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                o.Endpoint = new Uri(traceCollectorUrl);
+            })
+            .AddConsoleExporter();
+    });
+
+
+var app = builder.Build();
+
+
+app.MapGet("/",
+    async (Tracer tracer, IMeterFactory metricFactory, IHttpClientFactory httpClientFactory) =>
+    {
+        
+        var isProduction = builder.Environment.IsProduction();
+        
+        #region Metric collection
+
+        var meter = metricFactory.Create(new MeterOptions(meterName));
+        var otlOrderCount = meter.CreateCounter<int>("otel_order");
+        otlOrderCount.Add(1);
+
+        #endregion
+
+        #region trace
+
+        using var httpSpan = tracer.StartActiveSpan("Making HTTP Call", SpanKind.Client);
+
+        httpSpan.SetAttribute("comms", "api");
+        httpSpan.SetAttribute("protocol", "http");
+        httpSpan.SetStatus(Status.Ok);
+       
+        var paymentServiceUrl = isProduction ? "http://paymentservice:8080": "http://localhost:5001";
+        var httpClient = httpClientFactory.CreateClient();
+        var paymentRequest = new HttpRequestMessage(HttpMethod.Get, paymentServiceUrl);
+
+        // Pass Trace Context to Payment Service
+        var propagator = new TraceContextPropagator();
+
+        var parentSpanContext = httpSpan.Context;
+        var activity = Activity.Current?.SetParentId(parentSpanContext.TraceId, parentSpanContext.SpanId);
+
+        if (activity != null)
+        {
+            var propagationContext = new PropagationContext(activity.Context, Baggage.Current);
+
+            propagator.Inject(propagationContext, paymentRequest.Headers,
+                (headers, name, value) => { headers.Add(name, value); });
+        }
+
+        // End passing trace context
+        try
+        {
+            Console.WriteLine($"Calling Payment Service at {paymentServiceUrl}");
+            await httpClient.SendAsync(paymentRequest);
+        }
+        catch
+        {
+            return "Run the Payment Service First.";
+        }
+
+        activity?.Stop();
+
+        #endregion
+
+        return "OK";
+    });
+app.Run();
+
+paymentservice program.cs
+
+using OpenTelemetry;
+using OpenTelemetry.Context.Propagation;
+using OpenTelemetry.Exporter;
+using OpenTelemetry.Resources;
+using OpenTelemetry.Trace;
+using PaymentService;
+
+var builder = WebApplication.CreateBuilder(args);
+var traceCollectorUrl = builder.Configuration["OtelTraceCollector:Host"] ?? "";
+
+if (builder.Environment.IsProduction())
+{
+    traceCollectorUrl = traceCollectorUrl.Replace("localhost", "alloy"); // set to docker container name of Alloy
+    Console.WriteLine($"Alloy address is set to {traceCollectorUrl}");
+}
+
+const string serviceName = "Payment Service";
+const string serviceVersion = "1.0.0";
+
+builder.Services
+    .AddSingleton(TracerProvider.Default.GetTracer(serviceName))
+    .AddOpenTelemetry()
+    .WithTracing(t =>
+    {
+        t.AddSource(serviceName)
+            .SetResourceBuilder(
+                ResourceBuilder.CreateDefault()
+                    .AddService(serviceName, serviceVersion: serviceVersion)
+            )
+            .AddOtlpExporter(o =>
+            {
+                o.Protocol = OtlpExportProtocol.HttpProtobuf;
+                o.Endpoint = new Uri(traceCollectorUrl);
+            })
+            .AddAspNetCoreInstrumentation()
+            .AddConsoleExporter()
+            .SetSampler<AlwaysOnSampler>();
+    });
+
+
+var app = builder.Build();
+
+// Remove all registered propagators to avoid conflicts.
+var propagators = new List<TextMapPropagator>();
+var compositePropagator = new CompositeTextMapPropagator(propagators);
+Sdk.SetDefaultTextMapPropagator(compositePropagator);
+
+app.MapGet("/", (HttpContext httpContext, Tracer tracer) =>
+{
+    var carrierContextPropagator = new SimpleTextMapPropagator();
+
+    var propagationContext =
+        carrierContextPropagator.ExtractActivityContext(default, httpContext.Request.Headers,
+            (headers, name) => headers[name]);
+
+    var spanContext = new SpanContext(propagationContext);
+    using var paymentSpan = tracer.StartActiveSpan("PaymentProcessing", SpanKind.Server,
+        spanContext);
+
+    paymentSpan.SetAttribute("db-name", "prod-sql");
+    paymentSpan.SetAttribute("connection-status", "success");
+    paymentSpan.SetAttribute("Query result count", "1");
+    paymentSpan.SetStatus(Status.Ok);
+
+
+    return "OK";
+});
+
+
+app.Run();
+
+tempo.yaml
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 3300
+
+distributor:
+  receivers: 
+    otlp:
+      protocols:
+        http:
+          endpoint: "0.0.0.0:4318"  # Replace 3200 with your desired port number
+
+
+compactor:
+  compaction:
+    block_retention: 48h                # configure total trace retention here
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: linux-microservices
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://admin:password@prometheus:9090/api/v1/write    # if you use as part of Docker Compose, use this line.
+      # - url: http://admin:password@localhost:9090/api/v1/write   # if you run locally, use this line.
+        send_exemplars: true
+
+storage:
+  trace:
+    backend: local                
+    local:
+      path: /var/tempo/traces      # Set to correct path on your computer
+    wal:
+      path: /var/tempo/wal         # Set to correct path on your computer
+
+#storage:
+#  trace:
+#    backend: s3                 
+#    s3:
+#      bucket: your-s3-bucket-name
+#      region: your-region
+#      access_key: your-access-key  # not needed if role_arn is used.
+#      secret_key: your-secret-key  # not needed if role_arn is used.
+#      role_arn: arn:aws:iam::123456789012:role/your-tempo-role
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+
+# 8. TraceQL – lekérdezőnyelv Tempo-hoz
+       Hasonló a PromQL-hez és LogQL-hez
+       Alap szintaxis:
+
+{} -> összes trace
+{name="Making HTTP Call"} -> csak bizonyos nevű span-ek
+{duration > 2ms} -> időtartam alapján
+{.service.name="Order Service"} -> attribútum alapján
+{...} | count()=2 -> aggregáció
+
+Példák:
+
+{name="Making HTTP Call" && duration>2ms}
+{.service.name="Order Service"} | avg(duration)>1ms
+
+Configurartions -> Data Sources -> Tempo -> Explore data -> input = {} -> Run query
+{name="Making HTTP Call"} -> Run query
+{name="Making HTTP Call" && duration>1ms} -> Run query
+{.service.name="Order Service"} -> Run query
+{.service.name="Order Service"} | count()=1 -> Run query
+{.service.name="Order Service"} | avg(duration)>2ms -> Run query
+{.service.name="Order Service" && .server.address="localhost"} | avg(duration)>2ms -> Run query
+
+# 9. TraceQL gyakorlás
+       Gyakorlófelület Grafanában:
+         Explore -> Tempo -> TraceQL
+         Írj saját lekérdezéseket (mint fent)
+         Visszakeresheted a Trace ID alapján is (pl. kódból kimásolva)
+
+# 10. Grafana Tempo → AWS S3 használata
+        Production környezetben ne használj helyi tárolást → használd pl. S3-at
+        2 módszer:
+          IAM User + Access/Secret key
+          EC2 IAM Role + role_arn a tempo.yaml-ben
+
+Példa konfig (S3 backend):
+yaml
+Copy
+Edit
+storage:
+  trace:
+    backend: s3
+    s3:
+      bucket: tempo-udemy-course
+      region: us-east-1
+      role_arn: arn:aws:iam::123456789012:role/grafana-tempo-role
+
+Ne felejtsd el:
+  tempo.service újraindítása a változások után
+  Prometheus metrika továbbítás maradjon: remote_write beállítás
+
+Részletesen:
+
+S3 -> Create bucket -> Bucket name = tempo-udemy-course -> Block all public access = pipa -> Create bucket
+IAM -> Policies -> Create policy -> Service = S3 -> json -> 
+
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "s3:GetObject",
+                "s3:PutObject",
+                "s3:ListBucket"
+            ],
+            "Resource": [
+                "arn:aws:s3:::tempo-udemy-course",
+                "arn:aws:s3:::tempo-udemy-course/*"
+            ]
+        }
+    ]
+}
+
+Next -> Policy name = s3-access-to-tempo -> create policy
+Roles -> Create roles -> Service = EC2 -> Next -> input = s3-access-to-tempo -> next -> Role name = grafana-tempo-role -> create role
+We need the grafana-tempo-role ARN, copy it -> open the tempo.yaml file
+
+server:
+  http_listen_port: 3200
+  grpc_listen_port: 3300
+
+distributor:
+  receivers: 
+    otlp:
+      protocols:
+        http:
+          endpoint: "0.0.0.0:4318"  # Replace 3200 with your desired port number
+
+
+compactor:
+  compaction:
+    block_retention: 48h                # configure total trace retention here
+
+metrics_generator:
+  registry:
+    external_labels:
+      source: tempo
+      cluster: linux-microservices
+  storage:
+    path: /var/tempo/generator/wal
+    remote_write:
+      - url: http://admin:password@prometheus:9090/api/v1/write    # if you use as part of Docker Compose, use this line.
+      # - url: http://admin:password@localhost:9090/api/v1/write   # if you run locally, use this line.
+        send_exemplars: true
+
+#storage:
+#  trace:
+#    backend: local                
+#    local:
+#      path: /var/tempo/traces      # Set to correct path on your computer
+#    wal:
+#      path: /var/tempo/wal         # Set to correct path on your computer
+
+storage:
+  trace:
+    backend: s3                 
+    s3:
+      bucket: tempo-udemy-course
+      region: us-east-1
+#      access_key: your-access-key  # not needed if role_arn is used.
+#      secret_key: your-secret-key  # not needed if role_arn is used.
+      role_arn: arn:aws:iam::123456789012:role/your-tempo-role		<- ide masold be az ARN-t
+
+overrides:
+  defaults:
+    metrics_generator:
+      processors: [service-graphs, span-metrics]
+
+Összefoglalás:
+
+Komponens		Szerep
+Grafana Tempo		Trace backend (idősoros trace mentés és visszakeresés)
+OTLP (HTTP/gRPC)	Adatformátum és protokoll trace küldéshez
+Grafana Alloy		Collector – továbbítja trace-et, metrikát
+Service Graph		Visualizálja a mikroszolgáltatások kapcsolatát
+TraceQL			Lekérdezőnyelv trace-ek és span-ek szűréséhez
+S3			Production trace tárolásra

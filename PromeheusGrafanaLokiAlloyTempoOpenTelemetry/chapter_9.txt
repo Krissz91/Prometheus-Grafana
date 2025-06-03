@@ -1,0 +1,64 @@
+[Navigáció az observability eszközök világában]
+
+Eszköz		Mire való?				Milyen adatot kezel?		Mikor használod?
+Prometheus	Metrikák gyűjtése és lekérdezése	Idősoros metrikák		CPU, memória, HTTP válaszidők
+Grafana		Vizualizáció, dashboard, alert		Grafikon, log, trace, metrika	Minden adatot „megjelenít”
+Loki		Log-gyűjtő és kereső			Naplók (logok)			Alkalmazásnaplók és hibák
+Tempo		Tracing (disztribúált lekövetés)	Nyomkövetés (trace-ek)		Mikroszolgáltatások közti hívások
+Alloy		Egységes adatgyűjtő ügynök		Minden: log, metrika, trace	Egyetlen agent mindenhez
+OpenTelemetry	Nyílt specifikáció és lib		Metrika, log, trace		Ha saját appban gyűjtenél adatot kódból
+
+Képzeld el így – egy webalkalmazás példáján keresztül:
+Egy felhasználó rákattint a „Vásárlás” gombra. Nézzük, melyik eszköz mit csinál:
+
+# 1. Prometheus
+       Figyeli:
+         Hány request futott le /buy endpointon
+         Mennyi idő alatt válaszolt az API
+         Volt-e 500-as hiba
+       Metrikák: számok, sebességek, arányok
+
+# 2. Loki
+       Feljegyzi:
+         „User 123 sikeresen vásárolt cipőt”
+         „Hiba: payment timeout”
+       Szöveges logok, hibakereséshez
+
+# 3. Tempo
+       Követi:
+         Melyik szolgáltatás hívta meg a fizetési API-t?
+         Mennyi időt töltött a DB-ben?
+         Hol lassult le a rendszer?
+       Trace-ek: a lekérések teljes útját mutatja
+
+# 4. Grafana
+       Ezekből mind vizualizál:
+         Dashboard -> Grafikon a vásárlások számáról
+         Logs fül -> Rákereshetsz a hibaüzenetre
+         Trace fül -> Kattintva végignézheted a teljes lekérést
+       Grafana = központi megjelenítő mindenhez
+
+# 5. Alloy
+       Ez egy modern „mindenes” ügynök:
+         Logokat, metrikákat, trace-eket is tud gyűjteni.
+         Kiváltja a promtail, node_exporter, stb. ügynököket.
+       Ha nem akarsz 3 külön klienst, Alloy tud mindent
+
+# 6. OpenTelemetry
+       Ez nem egy eszköz, hanem:
+         Egy szabvány és SDK (pl. Python, Go, Java)
+         Amivel saját alkalmazásodból gyűjthetsz:
+           metrikát (requests_total)
+           logot (logger.error)
+           trace-et (híváslánc)
+         És ezeket továbbküldheted -> Tempo, Prometheus, Loki felé
+       Programozói oldal, kódba építhető telemetry
+
+TL;DR – Memorizálható mondatokkal
+Eszköz		Rövid magyarázat
+Prometheus	Méri, hogy mi történik (számok)
+Loki		Megmondja, miért történt (log)
+Tempo		Megmutatja, hogyan történt (trace)
+Grafana		Mindezt egyben megjeleníti
+Alloy		Egy ügynök, ami minden adatot gyűjt
+OpenTelemetry	Kódból küldött adat szabvány szerint
