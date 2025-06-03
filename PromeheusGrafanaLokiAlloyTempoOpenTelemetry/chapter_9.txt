@@ -54,7 +54,7 @@ Egy felhasználó rákattint a „Vásárlás” gombra. Nézzük, melyik eszkö
          És ezeket továbbküldheted -> Tempo, Prometheus, Loki felé
        Programozói oldal, kódba építhető telemetry
 
-TL;DR – Memorizálható mondatokkal
+Összefoglalás:
 Eszköz		Rövid magyarázat
 Prometheus	Méri, hogy mi történik (számok)
 Loki		Megmondja, miért történt (log)
