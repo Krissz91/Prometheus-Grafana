@@ -309,6 +309,6 @@ Ez a dashboard tartalmaz:
   2. Lekérdezések száma (rate)
   3. Deadlock counter
   4. Kapcsolatok táblázat adatbázisonként
-  5.I/O stall adatok
+  5. I/O stall adatok
   6. Aktív felhasználói munkamenetek száma
   7. SYSADMIN joggal rendelkező felhasználók száma
