@@ -1,0 +1,314 @@
+mssq windows szerver 2019-el es prometheus/grafana monitoring linux ubuntuval
+Cél: a Prometheus gyűjtse a Windows MSSQL metrikákat, amiket Grafana-ban meg tudsz jeleníteni.
+
+window server 2019 (mssql, ssms, sql adatbázis minta)
+linux ubunt server (prometheus, grafana, mssql exporter)
+
+[Windows server]
+  Install-Module PSWindowsUpdate
+  Import-Module PSWindowsUpdate
+  Get-WindowsUpdate -AcceptAll -Install -AutoReboot
+  Set-TimeZone -Id "Central European Standard Time"
+  hostname
+  Rename-Computer -NewName DC1
+  Restart-Computer
+  Get-NetAdapter
+  Rename-NetAdapter -Name Ethernet -NewName Internal
+  New-NetIPAddress -IPAddress 192.168.10.1 -DefaultGateway 192.168.10.1 -PrefixLength 24 -InterfaceIndex 4
+  Disable-NetAdapterBinding -Name Internal -ComponentID ms_tcpip6
+  Set-DnsClientServerAddress -InterfaceIndex 4 -ServerAddresses 192.168.10.1
+
+Port engedélyezése Windows oldalon
+
+  New-NetFirewallRule -DisplayName "Allow SQL Server 1433" -Direction Inbound -Protocol TCP -LocalPort 1433 -Action Allow
+
+Connection string: ha nincs jelszó, csak Windows Authentication:
+Mindenképp SQL Server Authentication-t kell bekapcsolnod.
+Nyisd meg SSMS-t (SQL Server Management Studio)
+Csatlakozás -> DC1\SQLEXPRESS                 # DC1\SQLEXPRESS ez csak egy példa
+Jobb klikk a szervernévre -> Properties
+Security fül -> Válaszd:
+SQL Server and Windows Authentication mode
+OK, majd indítsd újra az SQL Server-t
+
+SQL-felhasználó létrehozása
+SSMS-ben -> Security mappa -> Logins mappa
+Jobb klikk -> New Login…
+Login name: sql_exporter
+Authentication: SQL Server Authentication
+Adj jelszót pl. Prometheus123!
+Alul: Default database: master
+Szerver szerepkör: public bőven elég monitorozáshoz
+OK
+
+Windows Defender Firewall -> Allow an app... -> File and Printer Sharing -> Enable
+Sql Server Configuration Manager -> SQL Server Network Configuration -> Protocols for SQLEXPRESS -> TCP/IP = Enabled -> Properties -> IP Addresses -> TCP Port = 1433
+Services -> SQL Server (SQLEXPRESS) -> Restart
+
+[Linux Server]
+# Hálózat beállítása
+  sudo nano /etc/netplan/50-cloud.init.yaml
+
+network:
+    ethernets:
+        eth0:
+            dhcp4: true
+        eth1:
+            addresses:
+            - 192.168.10.10/24
+            nameservers:
+              addresses:
+              - 192.168.10.1
+              - 8.8.8.8
+              search: []
+            routes:
+            - to: default
+              via: 192.168.1.91
+            optional: true
+    version: 2
+
+    sudo netplan apply
+    ip a
+
+# Prometheus telepítése Linux (Ubuntu) alatt
+  Letöltés a Prometheus oldalról, a megfelelő architektúra kiválasztásával (pl. amd64, arm64).
+  Telepítési lépések:
+    1. Lépj a https://prometheus.io/download oldalra.
+       -> operating system = linux -> Architecture = Pl.: amd64 (uname -a, arch paranccsal ellenőrízheted) -> copy link address
+    2. wget használatával letöltés.
+
+	sudo apt update
+    sudo apt upgrade
+	sudo apt install wget	# ha nincs
+	sudo wget https://github.com/prometheus/prometheus/releases/download/v3.4.0/prometheus-3.4.0.linux-amd64.tar.gz
+
+    3. useradd, groupadd: saját prometheus felhasználó és csoport létrehozása
+
+	sudo groupadd --system prometheus
+	sudo useradd -s /sbin/nologin --system -g prometheus prometheus
+
+    4. Mappák létrehozása (/etc/prometheus, /var/lib/prometheus).
+
+	sudo mkdir /var/lib/prometheus
+	sudo mkdir -p /etc/prometheus/rules
+	sudo mkdir -p /etc/prometheus/rules.s
+	sudo mkdir -p /etc/prometheus/files_sd
+
+    5. tar segítségével kicsomagolás.
+
+	sudo tar xvf prometheus-3.4.0.linux-amd64.tar.gz
+	cd prometheus-3.4.0.linux-amd64/
+
+    6. Bináris fájlok és konfigurációk áthelyezése a megfelelő helyre.
+
+	sudo mv prometheus promtool /usr/local/bin/
+	sudo cp prometheus.yml /etc/prometheus/
+
+    7. systemd szolgáltatásfájl létrehozása Prometheus futtatásához automatikusan induláskor.
+
+	prometheus --version
+	sudo tee /etc/systemd/system/prometheus.service<<EOF
+
+[Unit]
+Description=Prometheus
+Documentation=https://prometheus.io/docs/introduction/overview/
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=prometheus
+Group=prometheus
+ExecReload=/bin/kill -HUP $MAINPID
+ExecStart=/usr/local/bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/var/lib/prometheus \
+  --web.console.templates=/etc/prometheus/consoles \
+  --web.console.libraries=/etc/prometheus/console_libraries \
+  --web.listen-address=0.0.0.0:9090 \
+  --web.external-url=
+
+SyslogIdentifier=prometheus
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    8. Jogosultságok beállítása (chown, chmod).
+
+	sudo chown -R prometheus:prometheus /etc/prometheus/
+	sudo chown -R prometheus:prometheus /etc/prometheus/*
+	sudo chmod -R 775 /etc/prometheus/
+	sudo chmod -R 775 /etc/prometheus/*
+	sudo chown -R prometheus:prometheus /var/lib/prometheus/
+
+    9. Szolgáltatás indítása: systemctl start prometheus, majd enable és status.
+
+	sudo systemctl daemon-reload
+	sudo systemctl start prometheus
+	sudo systemctl enable prometheus
+	sudo systemctl status prometheus
+	cd ..
+
+    10. Nyizsd me abongeszot es ird be pl.: http://192.168.1.91:9090/
+        # ip cím eltérhet sőt bíztos...ha nem vm-ben csináltad akkor http://localhost:9090/
+
+# Grafana telepítése és konfigurálása ubuntu-n.
+  https://grafana.com/grafana/download?edition=ossS
+  wget https://dl.grafana.com/enterprise/release/grafana-enterprise-12.0.2.linux-amd64.tar.gz
+  tar -zxvf grafana-enterprise-12.0.2.linux-amd64.tar.gz
+  sudo nano /etc/systemd/system/grafana-server.service
+
+[Unit]
+Description=Grafana instance
+After=network.target
+
+[Service]
+User=user1
+Group=user1
+WorkingDirectory=/home/user1/grafana-v12.0.2
+ExecStart=/home/user1/grafana-v12.0.2/bin/grafana-server web
+Restart=always
+Environment=GF_PATHS_HOME=/home/user1/grafana-v12.0.2
+Environment=GF_PATHS_CONFIG=/home/user1/grafana-v12.0.2/conf/grafana.ini
+Environment=GF_PATHS_DATA=/home/user1/grafana-v12.0.2/data
+Environment=GF_PATHS_LOGS=/home/user1/grafana-v12.0.2/logs
+Environment=GF_PATHS_PLUGINS=/home/user1/grafana-v12.0.2/plugins
+Environment=GF_PATHS_PROVISIONING=/home/user1/grafana-v12.0.2/conf/provisioning
+
+[Install]
+WantedBy=multi-user.target
+
+(Cseréld ki a /path/to/...-t a pontos elérési útra.)
+
+  sudo systemctl daemon-reload
+  sudo systemctl start grafana-server
+  sudo systemctl enable grafana-server
+  sudo systemctl status grafana-server
+  sudo journalctl -u grafana-server.service -n 50 --no-pager     # ha valami gond lenne
+
+Elérés: http://localhost:3000 vagy http://<ip-address>:3000
+Default login: admin / admin
+
+Tuzfal:
+
+  sudo ufw status
+  sudo ufw allow 9090/tcp
+  sudo ufw allow 3000/tcp
+  sudo ufw allow 9399/tcp
+  sudo ufw reload
+
+http://<ip-address>:3000 -> Connections -> Add new connection -> input = Prometheus -> URL = http://<ip-address>:9090 -> Save and test
+
+# SQL Server metrikák exportálása Prometheus felé
+  Prometheus nem tud közvetlenül MSSQL-t olvasni, kell egy exporter:
+  A leggyakoribb megoldás a sql_exporter
+
+Hozz létre egy mappát, például:
+
+  sudo mkdir -p /opt/sql_exporter
+
+Belépés:
+
+  cd /opt/sql_exporter
+
+Használható, működő letöltési parancs:
+
+  sudo wget https://github.com/free/sql_exporter/releases/download/0.5/sql_exporter-0.5.linux-amd64.tar.gz
+
+Csomagold ki:
+
+  sudo tar -xvf sql_exporter-0.5.linux-amd64.tar.gz
+
+Belepes:
+
+  cd sql_exporter-0.5.linux-amd64/
+
+Tesztfuttatás: Győződjünk meg róla, hogy működik:
+
+  ./sql_exporter --version
+
+Systemd szolgáltatás:
+
+  sudo nano /etc/systemd/system/sql_exporter.service
+
+Majd illeszd be:
+
+[Unit]
+Description=SQL Exporter for Prometheus
+After=network.target
+
+[Service]
+User=user1
+WorkingDirectory=/opt/sql_exporter/sql_exporter-0.5.linux-amd64
+ExecStart=/opt/sql_exporter/sql_exporter-0.5.linux-amd64/sql_exporter --config.file=sql_exporter.yml
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+
+Engedélyezés és indítás
+
+  sudo systemctl daemon-reexec
+  sudo systemctl daemon-reload
+  sudo systemctl enable sql_exporter
+  sudo systemctl start sql_exporter
+
+Ezután ellenőrizheted:
+
+  sudo systemctl status sql_exporter
+
+Ha minden jól megy, az exporter elérhető lesz a következő címen:
+
+  http://localhost:9399/metrics vagy http://<ip-address>:9399/metrics
+
+Most jöhet az összekötés a Prometheus-szal
+
+  sudo nano /etc/prometheus/prometheus.yml
+
+Add hozzá ezt a scrape config blokkot a scrape_configs: alá:
+
+  - job_name: 'sql_exporter'
+    static_configs:
+      - targets: ['localhost:9399']
+
+Mentés és újraindítás:
+
+  sudo systemctl restart prometheus
+
+YAML fajl letrehozas:
+
+ sudo nano /opt/sql_exporter/sql_exporter-0.5.linux-amd64/sql_exporter.yml
+
+Tartalma:
+
+global:
+  scrape_timeout: 10s
+  min_interval: 30s
+  max_connections: 3
+  max_idle_connections: 3
+
+target:
+  data_source_name: "sqlserver://sql_exporter:Prometheus123!@192.168.10.1:1433?database=master"
+  collectors: ["mssql_standard"]
+
+collector_files:
+  - mssql_standard.collector.yml
+
+  sudo systemctl restart sql_exporter
+  sudo systemctl restart prometheus
+  sudo systemctl restart grafana.server
+
+# Ha minden rendbe akkor a Grafana-ban
+
+Dashboards -> New -> Import -> Drop a JSON file -> Import
+
+Ez a dashboard tartalmaz:
+  1. Aktív kapcsolatok összesítve
+  2. Lekérdezések száma (rate)
+  3. Deadlock counter
+  4. Kapcsolatok táblázat adatbázisonként
+  5.I/O stall adatok
+  6. Aktív felhasználói munkamenetek száma
+  7. SYSADMIN joggal rendelkező felhasználók száma

@@ -1,0 +1,115 @@
+{
+  "id": null,
+  "uid": "mssql-prometheus-sec",
+  "title": "MSSQL Server Monitoring + Security (Prometheus)",
+  "tags": ["mssql", "sqlserver", "prometheus", "security"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 2,
+  "refresh": "30s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Aktív kapcsolatok (összes adatbázis)",
+      "targets": [
+        {
+          "expr": "sum(mssql_connections)",
+          "refId": "A"
+        }
+      ],
+      "gridPos": { "x": 0, "y": 0, "w": 6, "h": 4 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Aktív felhasználói munkamenetek",
+      "targets": [
+        {
+          "expr": "mssql_user_sessions",
+          "refId": "B"
+        }
+      ],
+      "gridPos": { "x": 6, "y": 0, "w": 6, "h": 4 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "SYSADMIN loginek száma",
+      "targets": [
+        {
+          "expr": "mssql_sysadmin_users",
+          "refId": "C"
+        }
+      ],
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Deadlock számláló",
+      "targets": [
+        {
+          "expr": "mssql_deadlocks",
+          "refId": "D"
+        }
+      ],
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"] },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "type": "graph",
+      "title": "Lekérdezések száma (mssql_batch_requests)",
+      "targets": [
+        {
+          "expr": "rate(mssql_batch_requests[5m])",
+          "refId": "E"
+        }
+      ],
+      "gridPos": { "x": 0, "y": 4, "w": 24, "h": 8 }
+    },
+    {
+      "type": "table",
+      "title": "Kapcsolatok adatbázisonként",
+      "targets": [
+        {
+          "expr": "mssql_connections",
+          "refId": "F",
+          "format": "table"
+        }
+      ],
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 }
+    },
+    {
+      "type": "table",
+      "title": "I/O Stall adatok",
+      "targets": [
+        {
+          "expr": "mssql_io_stall_seconds",
+          "refId": "G",
+          "format": "table"
+        }
+      ],
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 }
+    }
+  ]
+}
